@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.corewatch.BatterySession
 import com.corewatch.MonitorViewModel
 import com.corewatch.monitor.CpuClock
 import com.corewatch.monitor.DeviceInfo
@@ -44,7 +44,7 @@ import com.corewatch.ui.components.GlowDot
 import com.corewatch.ui.components.HistoryCharts
 import com.corewatch.ui.components.IdentityHeader
 import com.corewatch.ui.components.RamCard
-import com.corewatch.ui.components.BatteryCard
+import com.corewatch.ui.components.PowerThermalCard
 import com.corewatch.ui.components.SystemInfoPanel
 import com.corewatch.ui.components.AccentPicker
 import com.corewatch.ui.theme.LocalPalette
@@ -63,6 +63,7 @@ fun CoreWatchScreen(
 ) {
     val metrics by viewModel.metrics.collectAsStateWithLifecycle()
     val info = viewModel.deviceInfo
+    val session = viewModel.batterySession
 
     // Rolling window of recent CPU peak frequencies, feeding the sparkline.
     val history = remember { mutableStateListOf<Float>() }
@@ -98,9 +99,9 @@ fun CoreWatchScreen(
         }
 
         if (wide) {
-            LandscapeLayout(outer, info, metrics, history, charts, selectedTheme, onThemeChange)
+            LandscapeLayout(outer, info, metrics, session, history, charts, selectedTheme, onThemeChange)
         } else {
-            PortraitLayout(outer, info, metrics, history, charts, selectedTheme, onThemeChange)
+            PortraitLayout(outer, info, metrics, session, history, charts, selectedTheme, onThemeChange)
         }
     }
 }
@@ -110,6 +111,7 @@ private fun PortraitLayout(
     modifier: Modifier,
     info: DeviceInfo,
     metrics: LiveMetrics,
+    session: BatterySession,
     history: List<Float>,
     charts: @Composable () -> Unit,
     selectedTheme: ThemeId,
@@ -122,10 +124,11 @@ private fun PortraitLayout(
         Header(selectedTheme, onThemeChange)
         IdentityHeader(info, Modifier.fillMaxWidth())
         CpuCard(metrics.cpu, history, Modifier.fillMaxWidth())
-        if (metrics.cpu.perCoreMhz.isNotEmpty()) {
+        if (metrics.cpu.hasPerCoreData) {
             CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
         }
-        LiveDuo(metrics)
+        RamCard(metrics, Modifier.fillMaxWidth())
+        PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth())
         charts()
         SystemInfoPanel(info, Modifier.fillMaxWidth())
         Spacer(Modifier.height(20.dp))
@@ -137,6 +140,7 @@ private fun LandscapeLayout(
     modifier: Modifier,
     info: DeviceInfo,
     metrics: LiveMetrics,
+    session: BatterySession,
     history: List<Float>,
     charts: @Composable () -> Unit,
     selectedTheme: ThemeId,
@@ -161,11 +165,11 @@ private fun LandscapeLayout(
                 ) {
                     CpuCard(metrics.cpu, history, Modifier.weight(1f).fillMaxHeight())
                     RamCard(metrics, Modifier.weight(1f).fillMaxHeight())
-                    BatteryCard(metrics.battery, Modifier.weight(1f).fillMaxHeight())
                 }
-                if (metrics.cpu.perCoreMhz.isNotEmpty()) {
+                if (metrics.cpu.hasPerCoreData) {
                     CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
                 }
+                PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth())
                 charts()
             }
             // Right: static system info (scrolls if the screen is short).
@@ -178,17 +182,9 @@ private fun LandscapeLayout(
     }
 }
 
-/** The RAM + battery-temp tiles as an equal-height pair. */
-@Composable
-private fun ColumnScope.LiveDuo(metrics: LiveMetrics) {
-    Row(
-        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-        horizontalArrangement = Arrangement.spacedBy(GAP),
-    ) {
-        RamCard(metrics, Modifier.weight(1f).fillMaxHeight())
-        BatteryCard(metrics.battery, Modifier.weight(1f).fillMaxHeight())
-    }
-}
+/** Whether the kernel exposed any per-core signal (clock or load) worth showing. */
+private val CpuClock.hasPerCoreData: Boolean
+    get() = perCoreMhz.isNotEmpty() || perCoreLoad.any { !it.isNaN() }
 
 @Composable
 private fun Header(selectedTheme: ThemeId, onThemeChange: (ThemeId) -> Unit) {

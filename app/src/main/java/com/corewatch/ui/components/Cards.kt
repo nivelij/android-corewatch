@@ -46,12 +46,16 @@ import kotlin.math.sin
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.corewatch.BatterySession
+import com.corewatch.monitor.BatteryHealth
 import com.corewatch.monitor.BatteryInfo
 import com.corewatch.monitor.ChargeStatus
 import com.corewatch.monitor.CpuClock
 import com.corewatch.monitor.DeviceInfo
 import com.corewatch.monitor.LiveMetrics
 import com.corewatch.monitor.Plug
+import com.corewatch.monitor.ThermalInfo
+import com.corewatch.monitor.ThermalStatus
 import com.corewatch.ui.theme.LocalPalette
 import com.corewatch.ui.theme.paletteFor
 import com.corewatch.ui.theme.Panel
@@ -59,6 +63,7 @@ import com.corewatch.ui.theme.PanelBorder
 import com.corewatch.ui.theme.StatusHot
 import com.corewatch.ui.theme.StatusNormal
 import com.corewatch.ui.theme.StatusWarm
+import com.corewatch.ui.theme.TextMuted
 import com.corewatch.ui.theme.TextPrimary
 import com.corewatch.ui.theme.ThemeCatalog
 import com.corewatch.ui.theme.ThemeId
@@ -194,30 +199,35 @@ fun CpuCard(cpu: CpuClock, history: List<Float>, modifier: Modifier = Modifier) 
     }
 }
 
-/** Per-core clock grid — one tile per logical CPU, tinted by how hard the core is boosting. */
+/** Per-core grid — one tile per logical CPU, showing clock and/or live load %, tinted by load. */
 @Composable
 fun CpuCoresCard(cpu: CpuClock, modifier: Modifier = Modifier) {
-    val perCore = cpu.perCoreMhz
+    val mhzList = cpu.perCoreMhz
+    val loadList = cpu.perCoreLoad
+    val count = maxOf(mhzList.size, loadList.size)
     Panel(label = "CPU Cores", modifier = modifier, trailing = { LiveBadge(cpu.live) }) {
-        if (perCore.isEmpty()) {
-            Caption("per-core clocks not exposed by kernel")
+        if (count == 0) {
+            Caption("per-core data not exposed by kernel")
             return@Panel
         }
-        // Tint range: cluster min/max when known, else derive from the sample itself.
-        val lo = cpu.minMhz ?: perCore.min()
-        val hi = (cpu.maxMhz ?: perCore.max()).coerceAtLeast(lo + 1)
-        perCore.chunked(CORE_COLUMNS).forEachIndexed { rowIdx, row ->
+        // Clock tint range: cluster min/max when known, else derive from the sample itself.
+        val lo = cpu.minMhz ?: mhzList.minOrNull() ?: 0
+        val hi = (cpu.maxMhz ?: mhzList.maxOrNull() ?: (lo + 1)).coerceAtLeast(lo + 1)
+        (0 until count).toList().chunked(CORE_COLUMNS).forEachIndexed { rowIdx, rowIndices ->
             if (rowIdx > 0) Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                row.forEachIndexed { colIdx, mhz ->
-                    val coreNumber = rowIdx * CORE_COLUMNS + colIdx + 1
-                    CoreTile(coreNumber, mhz, coreIntensity(mhz, lo, hi), Modifier.weight(1f))
+                rowIndices.forEach { i ->
+                    val mhz = mhzList.getOrNull(i)
+                    val load = loadList.getOrNull(i)?.takeIf { !it.isNaN() }
+                    // Prefer load for the tile tint; fall back to relative clock when load is absent.
+                    val tint = load ?: mhz?.let { coreIntensity(it, lo, hi) } ?: 0f
+                    CoreTile(i + 1, mhz, load, tint, Modifier.weight(1f))
                 }
                 // Keep tiles a uniform width by padding the final row.
-                repeat(CORE_COLUMNS - row.size) { Spacer(Modifier.weight(1f)) }
+                repeat(CORE_COLUMNS - rowIndices.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
@@ -229,10 +239,11 @@ private fun coreIntensity(mhz: Int, lo: Int, hi: Int): Float =
     ((mhz - lo).toFloat() / (hi - lo)).coerceIn(0f, 1f)
 
 @Composable
-private fun CoreTile(core: Int, mhz: Int, intensity: Float, modifier: Modifier = Modifier) {
+private fun CoreTile(core: Int, mhz: Int?, load: Float?, tint: Float, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(14.dp)
-    // Idle cores stay dim; boosting cores glow in the active accent.
-    val fill = LocalPalette.current.accent.copy(alpha = 0.10f + 0.42f * intensity)
+    val accent = LocalPalette.current.accent
+    // Idle cores stay dim; busy cores glow in the active accent.
+    val fill = accent.copy(alpha = 0.10f + 0.42f * tint.coerceIn(0f, 1f))
     Column(
         modifier = modifier
             .clip(shape)
@@ -248,18 +259,52 @@ private fun CoreTile(core: Int, mhz: Int, intensity: Float, modifier: Modifier =
             maxLines = 1,
         )
         Spacer(Modifier.height(4.dp))
-        // Number and unit are stacked so 4-digit clocks (e.g. "3187") never clip the unit.
+        // Clock is the hero when available; otherwise the load % takes its place. Unit is stacked
+        // so 4-digit clocks (e.g. "3187") never clip.
         Text(
-            text = "$mhz",
+            text = mhz?.toString() ?: load?.let { "${(it * 100).roundToInt()}" } ?: "—",
             style = MaterialTheme.typography.titleMedium.mono().copy(fontWeight = FontWeight.SemiBold),
             color = TextPrimary,
             maxLines = 1,
         )
         Text(
-            text = "MHz",
+            text = if (mhz != null) "MHz" else "%",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
+        )
+        if (load != null) {
+            Spacer(Modifier.height(7.dp))
+            LoadBar(load, accent)
+            if (mhz != null) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "${(load * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** Thin per-core load meter. */
+@Composable
+private fun LoadBar(fraction: Float, accent: Color) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(3.dp)
+            .clip(CircleShape)
+            .background(PanelBorder),
+    ) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .clip(CircleShape)
+                .background(accent),
         )
     }
 }
@@ -291,48 +336,114 @@ private fun tempStatus(tempC: Float): TempStatus = when {
     else -> TempStatus.HOT
 }
 
+/**
+ * The battery is the app's main instrument, so it carries everything power/thermal in one cluster:
+ * live battery (temp + charge + current/power) on the left, thermal throttle state on the right,
+ * and a hairline-divided SESSION footer with the whole-session min/max/avg readout below.
+ */
 @Composable
-fun BatteryCard(battery: BatteryInfo, modifier: Modifier = Modifier) {
-    val pal = LocalPalette.current
+fun PowerThermalCard(
+    battery: BatteryInfo,
+    thermal: ThermalInfo,
+    session: BatterySession,
+    modifier: Modifier = Modifier,
+) {
+    val accent = LocalPalette.current.accent
     val tempC = battery.tempC
-    val status = tempC?.let { tempStatus(it) }
     val tempColor by animateColorAsState(
-        targetValue = status?.color ?: MaterialTheme.colorScheme.onSurfaceVariant,
-        label = "tempColor",
+        targetValue = tempC?.let { tempStatus(it).color } ?: MaterialTheme.colorScheme.onSurfaceVariant,
+        label = "battTemp",
     )
+    val (thermalLabel, thermalColor) = thermalDisplay(thermal.status)
+
     Panel(
-        label = "Battery",
+        label = "Power & thermal",
         modifier = modifier,
-        // Subtle pulsing "power in" cue when charging; the full state is spelled out below.
-        trailing = { if (battery.isCharging) GlowDot(color = pal.accent, pulse = true) },
+        trailing = { if (battery.isCharging) GlowDot(color = accent, pulse = true) },
     ) {
-        MetricValue(
-            value = tempC?.let { String.format("%.1f", it) } ?: "—",
-            unit = "°C",
-            color = tempColor,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = statusLine(battery),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        battery.currentMa?.let { ma ->
-            Spacer(Modifier.height(3.dp))
-            val sign = if (ma > 0) "+" else if (ma < 0) "-" else ""
-            // Pair current with instantaneous power (V × A) when voltage is available.
-            val power = battery.powerW
-            val text = buildString {
-                append(sign).append(formatCurrent(abs(ma)))
-                if (power != null) append("  ·  ").append(String.format("%.2f W", abs(power)))
+        Row(Modifier.fillMaxWidth()) {
+            // Left: live battery (a touch wider so the current · power line stays on one line).
+            Column(Modifier.weight(1.25f)) {
+                MetricValue(
+                    value = tempC?.let { String.format("%.1f", it) } ?: "—",
+                    unit = "°C",
+                    color = tempColor,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = statusLine(battery),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                battery.currentMa?.let { ma ->
+                    Spacer(Modifier.height(3.dp))
+                    val sign = if (ma > 0) "+" else if (ma < 0) "-" else ""
+                    val power = battery.powerW
+                    val text = buildString {
+                        append(sign).append(formatCurrent(abs(ma)))
+                        if (power != null) append(" · ").append(String.format("%.2f W", abs(power)))
+                    }
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.titleMedium.mono(),
+                        color = if (battery.isCharging) accent else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                }
             }
-            Text(
-                text = text,
-                style = MaterialTheme.typography.titleMedium.mono(),
-                color = if (battery.isCharging) pal.accent else MaterialTheme.colorScheme.onSurface,
-            )
+            Spacer(Modifier.width(16.dp))
+            // Right: thermal throttle state.
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = thermalLabel,
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = thermalColor,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.height(2.dp))
+                Caption("throttle state")
+                thermal.headroom?.let { hr ->
+                    Spacer(Modifier.height(10.dp))
+                    val animated by animateFloatAsState(hr.coerceIn(0f, 1f), tween(600), label = "headroom")
+                    ThermalBar(animated, thermalColor)
+                    Spacer(Modifier.height(5.dp))
+                    // 0% = cool, 100% = throttling begins; the bar fills as the device heats up.
+                    Caption("thermal load ${(hr * 100).roundToInt()}%")
+                }
+            }
         }
+
+        Spacer(Modifier.height(14.dp))
+        HairlineDivider()
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("Session")
+        Spacer(Modifier.height(10.dp))
+        SessionStat3(
+            "Peak" to (session.maxTempC?.let { String.format("%.1f °C", it) } ?: "—"),
+            "Low" to (session.minTempC?.let { String.format("%.1f °C", it) } ?: "—"),
+            "Avg" to (session.avgPowerW?.let { String.format("%.2f W", it) } ?: "—"),
+        )
+        SessionStat3(
+            "Energy" to formatEnergy(session.energyMwh),
+            "Health" to healthLabel(battery.health),
+            null,
+        )
     }
+}
+
+/** A row of up to three compact label/value session cells. */
+@Composable
+private fun SessionStat3(a: Pair<String, String>, b: Pair<String, String>?, c: Pair<String, String>?) {
+    Row(Modifier.fillMaxWidth()) {
+        InfoCell(a.first, a.second, Modifier.weight(1f))
+        if (b != null) InfoCell(b.first, b.second, Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
+        if (c != null) InfoCell(c.first, c.second, Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun HairlineDivider() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(PanelBorder))
 }
 
 private fun statusLine(b: BatteryInfo): String {
@@ -353,6 +464,50 @@ private fun statusLine(b: BatteryInfo): String {
 
 private fun formatCurrent(maAbs: Int): String =
     if (maAbs >= 1000) String.format("%.2f A", maAbs / 1000f) else "$maAbs mA"
+
+/* ---------- thermal / session helpers ---------- */
+
+private fun thermalDisplay(status: ThermalStatus): Pair<String, Color> = when (status) {
+    ThermalStatus.NONE -> "Normal" to StatusNormal
+    ThermalStatus.LIGHT -> "Light" to StatusWarm
+    ThermalStatus.MODERATE -> "Moderate" to StatusWarm
+    ThermalStatus.SEVERE -> "Severe" to StatusHot
+    ThermalStatus.CRITICAL -> "Critical" to StatusHot
+    ThermalStatus.EMERGENCY -> "Emergency" to StatusHot
+    ThermalStatus.SHUTDOWN -> "Shutdown" to StatusHot
+    ThermalStatus.UNKNOWN -> "—" to TextMuted
+}
+
+@Composable
+private fun ThermalBar(fraction: Float, color: Color) {
+    Box(
+        Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(PanelBorder),
+    ) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .clip(CircleShape)
+                .background(color),
+        )
+    }
+}
+
+private fun formatEnergy(mwh: Float): String = when {
+    mwh <= 0f -> "—"
+    mwh >= 1000f -> String.format("%.2f Wh", mwh / 1000f)
+    else -> "${mwh.roundToInt()} mWh"
+}
+
+private fun healthLabel(h: BatteryHealth): String = when (h) {
+    BatteryHealth.GOOD -> "Good"
+    BatteryHealth.OVERHEAT -> "Overheat"
+    BatteryHealth.DEAD -> "Dead"
+    BatteryHealth.OVER_VOLTAGE -> "Over-voltage"
+    BatteryHealth.COLD -> "Cold"
+    BatteryHealth.FAILURE -> "Failure"
+    BatteryHealth.UNKNOWN -> "—"
+}
 
 /* ---------- static system info grid ---------- */
 
