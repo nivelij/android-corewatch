@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -22,18 +23,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.os.SystemClock
+import android.widget.Toast
 import com.corewatch.BatterySession
 import com.corewatch.MonitorViewModel
+import com.corewatch.R
 import com.corewatch.monitor.CpuClock
 import com.corewatch.monitor.DeviceInfo
 import com.corewatch.monitor.LiveMetrics
@@ -53,6 +60,7 @@ import com.corewatch.ui.theme.ThemeId
 import com.corewatch.ui.theme.mono
 
 private const val HISTORY_SIZE = 60
+private const val BACK_EXIT_WINDOW_MS = 2_000L
 private val GAP = 14.dp
 
 @Composable
@@ -60,10 +68,24 @@ fun CoreWatchScreen(
     viewModel: MonitorViewModel = viewModel(),
     selectedTheme: ThemeId = LocalPalette.current.id,
     onThemeChange: (ThemeId) -> Unit = {},
+    onExit: () -> Unit = {},
 ) {
     val metrics by viewModel.metrics.collectAsStateWithLifecycle()
     val info = viewModel.deviceInfo
     val session = viewModel.batterySession
+
+    // Back exits only on a deliberate double-press; a single back arms a short window.
+    val context = LocalContext.current
+    var lastBackAt by remember { mutableStateOf(0L) }
+    BackHandler {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBackAt < BACK_EXIT_WINDOW_MS) {
+            onExit()
+        } else {
+            lastBackAt = now
+            Toast.makeText(context, context.getString(R.string.back_to_exit), Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Rolling window of recent CPU peak frequencies, feeding the sparkline.
     val history = remember { mutableStateListOf<Float>() }
