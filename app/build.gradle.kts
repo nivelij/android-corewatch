@@ -18,6 +18,13 @@ val releaseStoreFile: String? =
     System.getenv("KEYSTORE_FILE") ?: keystoreProperties.getProperty("storeFile")
 val hasReleaseSigning = releaseStoreFile != null
 
+// Release version comes from the pushed git tag in CI (e.g. tag "v0.1" -> "0.1"),
+// falling back to this value for local builds.
+val appVersionName = System.getenv("GITHUB_REF_NAME")
+    ?.takeIf { it.startsWith("v") }
+    ?.removePrefix("v")
+    ?: "0.1"
+
 android {
     namespace = "com.corewatch"
     compileSdk = 35
@@ -27,7 +34,15 @@ android {
         minSdk = 31
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0"
+        versionName = appVersionName
+    }
+
+    // Name the APK corewatch-<version>.apk instead of the default app-release.apk.
+    applicationVariants.all {
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "corewatch-$appVersionName.apk"
+        }
     }
 
     signingConfigs {
