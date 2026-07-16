@@ -17,10 +17,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
@@ -60,10 +58,6 @@ object SessionCollector {
         }
     }.flowOn(Dispatchers.IO)
         .stateIn(scope, SharingStarted.WhileSubscribed(5_000), LiveMetrics.EMPTY)
-
-    /** Latest recorded sample (recorder cadence), for background consumers like the notification. */
-    private val _latest = MutableStateFlow(LiveMetrics.EMPTY)
-    val latest: StateFlow<LiveMetrics> = _latest.asStateFlow()
 
     // ---- Whole-session history (charts). ----
     val cpuHistory = mutableStateListOf<Float>()
@@ -122,7 +116,6 @@ object SessionCollector {
                     decimate(ramHistory)
                     historyIntervalSec *= 2
                 }
-                _latest.value = sample
                 delay(historyIntervalSec * 1_000L)
             }
         }
@@ -140,7 +133,6 @@ object SessionCollector {
         batteryTempMaxC = null
         batteryEnergyMwh = 0f
         batteryElapsedSec = 0
-        _latest.value = LiveMetrics.EMPTY
     }
 
     /** Halve a series by keeping every other point — preserves whole-session coverage, bounded. */
