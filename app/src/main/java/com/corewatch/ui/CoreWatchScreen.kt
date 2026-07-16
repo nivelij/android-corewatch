@@ -39,6 +39,7 @@ import com.corewatch.monitor.DeviceInfo
 import com.corewatch.monitor.LiveMetrics
 import com.corewatch.ui.components.CoreGlyph
 import com.corewatch.ui.components.CpuCard
+import com.corewatch.ui.components.CpuCoresCard
 import com.corewatch.ui.components.GlowDot
 import com.corewatch.ui.components.HistoryCharts
 import com.corewatch.ui.components.IdentityHeader
@@ -114,6 +115,9 @@ private fun PortraitLayout(
         Header()
         IdentityHeader(info, Modifier.fillMaxWidth())
         CpuCard(metrics.cpu, history, Modifier.fillMaxWidth())
+        if (metrics.cpu.perCoreMhz.isNotEmpty()) {
+            CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
+        }
         LiveDuo(metrics)
         charts()
         SystemInfoPanel(info, Modifier.fillMaxWidth())
@@ -149,6 +153,9 @@ private fun LandscapeLayout(
                     CpuCard(metrics.cpu, history, Modifier.weight(1f).fillMaxHeight())
                     RamCard(metrics, Modifier.weight(1f).fillMaxHeight())
                     BatteryCard(metrics.battery, Modifier.weight(1f).fillMaxHeight())
+                }
+                if (metrics.cpu.perCoreMhz.isNotEmpty()) {
+                    CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
                 }
                 charts()
             }

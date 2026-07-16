@@ -6,6 +6,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -180,6 +182,76 @@ fun CpuCard(cpu: CpuClock, history: List<Float>, modifier: Modifier = Modifier) 
                 Caption("live clock not exposed by kernel")
             }
         }
+    }
+}
+
+/** Per-core clock grid — one tile per logical CPU, tinted by how hard the core is boosting. */
+@Composable
+fun CpuCoresCard(cpu: CpuClock, modifier: Modifier = Modifier) {
+    val perCore = cpu.perCoreMhz
+    Panel(label = "CPU Cores", modifier = modifier, trailing = { LiveBadge(cpu.live) }) {
+        if (perCore.isEmpty()) {
+            Caption("per-core clocks not exposed by kernel")
+            return@Panel
+        }
+        // Tint range: cluster min/max when known, else derive from the sample itself.
+        val lo = cpu.minMhz ?: perCore.min()
+        val hi = (cpu.maxMhz ?: perCore.max()).coerceAtLeast(lo + 1)
+        perCore.chunked(CORE_COLUMNS).forEachIndexed { rowIdx, row ->
+            if (rowIdx > 0) Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                row.forEachIndexed { colIdx, mhz ->
+                    val coreNumber = rowIdx * CORE_COLUMNS + colIdx + 1
+                    CoreTile(coreNumber, mhz, coreIntensity(mhz, lo, hi), Modifier.weight(1f))
+                }
+                // Keep tiles a uniform width by padding the final row.
+                repeat(CORE_COLUMNS - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+private const val CORE_COLUMNS = 4
+
+private fun coreIntensity(mhz: Int, lo: Int, hi: Int): Float =
+    ((mhz - lo).toFloat() / (hi - lo)).coerceIn(0f, 1f)
+
+@Composable
+private fun CoreTile(core: Int, mhz: Int, intensity: Float, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(14.dp)
+    // Idle cores stay dim; boosting cores glow gold.
+    val fill = Accent.copy(alpha = 0.10f + 0.42f * intensity)
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(fill)
+            .border(BorderStroke(1.dp, PanelBorder), shape)
+            .padding(vertical = 10.dp, horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "Core $core",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(4.dp))
+        // Number and unit are stacked so 4-digit clocks (e.g. "3187") never clip the unit.
+        Text(
+            text = "$mhz",
+            style = MaterialTheme.typography.titleMedium.mono().copy(fontWeight = FontWeight.SemiBold),
+            color = TextPrimary,
+            maxLines = 1,
+        )
+        Text(
+            text = "MHz",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 
