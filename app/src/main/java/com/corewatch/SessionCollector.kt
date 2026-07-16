@@ -62,6 +62,7 @@ object SessionCollector {
     // ---- Whole-session history (charts). ----
     val cpuHistory = mutableStateListOf<Float>()
     val ramHistory = mutableStateListOf<Float>()
+    val tempHistory = mutableStateListOf<Float>()
 
     var ramTotalBytes by mutableLongStateOf(0L)
         private set
@@ -101,6 +102,7 @@ object SessionCollector {
                 ramTotalBytes = sample.ramTotalBytes
                 cpuHistory.add(sample.cpu.currentMaxMhz?.toFloat() ?: Float.NaN)
                 ramHistory.add(sample.ramUsedBytes.toFloat())
+                tempHistory.add(sample.battery.tempC ?: Float.NaN)
 
                 sample.battery.tempC?.let { t ->
                     batteryTempMinC = batteryTempMinC?.let { min(it, t) } ?: t
@@ -114,6 +116,7 @@ object SessionCollector {
                 if (cpuHistory.size > HISTORY_MAX_POINTS) {
                     decimate(cpuHistory)
                     decimate(ramHistory)
+                    decimate(tempHistory)
                     historyIntervalSec *= 2
                 }
                 delay(historyIntervalSec * 1_000L)
@@ -127,6 +130,7 @@ object SessionCollector {
         recorderJob = null
         cpuHistory.clear()
         ramHistory.clear()
+        tempHistory.clear()
         ramTotalBytes = 0L
         historyIntervalSec = HISTORY_BASE_INTERVAL_SEC
         batteryTempMinC = null

@@ -28,6 +28,7 @@ import com.corewatch.ui.theme.mono
 
 private fun mhzToGhz(mhz: Float): String = String.format("%.2f GHz", mhz / 1000f)
 private fun bytesToGb(bytes: Float): String = String.format("%.1f GB", bytes / 1_073_741_824f)
+private fun degC(t: Float): String = String.format("%.1f °C", t)
 
 /** Both session charts, stacked. Renders whatever data exists so far this session. */
 @Composable
@@ -36,6 +37,7 @@ fun HistoryCharts(
     cpuMaxMhz: Int?,
     ramPoints: List<Float>,
     ramTotalBytes: Long,
+    tempPoints: List<Float>,
     intervalSec: Int,
     modifier: Modifier = Modifier,
 ) {
@@ -44,6 +46,12 @@ fun HistoryCharts(
         ?: 1f
     val ramTop = if (ramTotalBytes > 0) ramTotalBytes.toFloat()
     else ramPoints.maxOrNull()?.times(1.1f) ?: 1f
+
+    // Temperature sits in a fixed 20–50°C band (so slow drift reads honestly, not flat or jumpy),
+    // expanding only if a reading falls outside it.
+    val tempValid = tempPoints.filter { !it.isNaN() }
+    val tempLo = minOf(TEMP_BAND_LOW, tempValid.minOrNull() ?: TEMP_BAND_LOW)
+    val tempHi = maxOf(TEMP_BAND_HIGH, tempValid.maxOrNull() ?: TEMP_BAND_HIGH)
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         MetricChartCard(
@@ -62,8 +70,19 @@ fun HistoryCharts(
             intervalSec = intervalSec,
             format = ::bytesToGb,
         )
+        MetricChartCard(
+            label = "Battery temperature",
+            points = tempPoints,
+            yMin = tempLo,
+            yMax = tempHi,
+            intervalSec = intervalSec,
+            format = ::degC,
+        )
     }
 }
+
+private const val TEMP_BAND_LOW = 20f
+private const val TEMP_BAND_HIGH = 50f
 
 @Composable
 private fun MetricChartCard(

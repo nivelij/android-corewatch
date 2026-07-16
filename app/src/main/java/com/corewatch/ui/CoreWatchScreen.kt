@@ -115,6 +115,7 @@ fun CoreWatchScreen(
                 cpuMaxMhz = info.maxClockMhz,
                 ramPoints = viewModel.ramHistory,
                 ramTotalBytes = viewModel.ramTotalBytes,
+                tempPoints = viewModel.tempHistory,
                 intervalSec = viewModel.historyIntervalSec,
                 modifier = Modifier.fillMaxWidth(),
             )
