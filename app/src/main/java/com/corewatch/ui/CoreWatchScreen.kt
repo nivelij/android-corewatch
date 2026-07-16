@@ -46,17 +46,21 @@ import com.corewatch.ui.components.IdentityHeader
 import com.corewatch.ui.components.RamCard
 import com.corewatch.ui.components.BatteryCard
 import com.corewatch.ui.components.SystemInfoPanel
-import com.corewatch.ui.theme.Accent
-import com.corewatch.ui.theme.BgBottom
-import com.corewatch.ui.theme.BgTop
+import com.corewatch.ui.components.AccentPicker
+import com.corewatch.ui.theme.LocalPalette
 import com.corewatch.ui.theme.TextPrimary
+import com.corewatch.ui.theme.ThemeId
 import com.corewatch.ui.theme.mono
 
 private const val HISTORY_SIZE = 60
 private val GAP = 14.dp
 
 @Composable
-fun CoreWatchScreen(viewModel: MonitorViewModel = viewModel()) {
+fun CoreWatchScreen(
+    viewModel: MonitorViewModel = viewModel(),
+    selectedTheme: ThemeId = LocalPalette.current.id,
+    onThemeChange: (ThemeId) -> Unit = {},
+) {
     val metrics by viewModel.metrics.collectAsStateWithLifecycle()
     val info = viewModel.deviceInfo
 
@@ -69,10 +73,11 @@ fun CoreWatchScreen(viewModel: MonitorViewModel = viewModel()) {
         }
     }
 
+    val pal = LocalPalette.current
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(BgTop, BgBottom))),
+            .background(Brush.verticalGradient(listOf(pal.bgTop, pal.bgBottom))),
     ) {
         val wide = maxWidth >= 600.dp
         val outer = Modifier
@@ -93,9 +98,9 @@ fun CoreWatchScreen(viewModel: MonitorViewModel = viewModel()) {
         }
 
         if (wide) {
-            LandscapeLayout(outer, info, metrics, history, charts)
+            LandscapeLayout(outer, info, metrics, history, charts, selectedTheme, onThemeChange)
         } else {
-            PortraitLayout(outer, info, metrics, history, charts)
+            PortraitLayout(outer, info, metrics, history, charts, selectedTheme, onThemeChange)
         }
     }
 }
@@ -107,12 +112,14 @@ private fun PortraitLayout(
     metrics: LiveMetrics,
     history: List<Float>,
     charts: @Composable () -> Unit,
+    selectedTheme: ThemeId,
+    onThemeChange: (ThemeId) -> Unit,
 ) {
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(GAP),
     ) {
-        Header()
+        Header(selectedTheme, onThemeChange)
         IdentityHeader(info, Modifier.fillMaxWidth())
         CpuCard(metrics.cpu, history, Modifier.fillMaxWidth())
         if (metrics.cpu.perCoreMhz.isNotEmpty()) {
@@ -132,9 +139,11 @@ private fun LandscapeLayout(
     metrics: LiveMetrics,
     history: List<Float>,
     charts: @Composable () -> Unit,
+    selectedTheme: ThemeId,
+    onThemeChange: (ThemeId) -> Unit,
 ) {
     Column(modifier) {
-        Header()
+        Header(selectedTheme, onThemeChange)
         Spacer(Modifier.height(GAP))
         Row(
             modifier = Modifier.fillMaxWidth().weight(1f),
@@ -182,7 +191,7 @@ private fun ColumnScope.LiveDuo(metrics: LiveMetrics) {
 }
 
 @Composable
-private fun Header() {
+private fun Header(selectedTheme: ThemeId, onThemeChange: (ThemeId) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -196,7 +205,9 @@ private fun Header() {
             color = TextPrimary,
         )
         Spacer(Modifier.weight(1f))
-        GlowDot(color = Accent, pulse = true)
+        AccentPicker(selectedTheme, onThemeChange)
+        Spacer(Modifier.width(12.dp))
+        GlowDot(color = LocalPalette.current.accent, pulse = true)
         Spacer(Modifier.width(8.dp))
         Text(
             text = "LIVE · 1s",

@@ -22,8 +22,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
-import com.corewatch.ui.theme.Accent
-import com.corewatch.ui.theme.AccentRamp
+import com.corewatch.ui.theme.LocalPalette
 import com.corewatch.ui.theme.PanelBorder
 import com.corewatch.ui.theme.mono
 
@@ -84,7 +83,7 @@ private fun MetricChartCard(
             Text(
                 text = current?.let(format) ?: "—",
                 style = MaterialTheme.typography.titleMedium.mono(),
-                color = Accent,
+                color = LocalPalette.current.accent,
             )
         },
     ) {
@@ -123,6 +122,7 @@ private fun MetricChartCard(
 
 @Composable
 private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, modifier: Modifier) {
+    val pal = LocalPalette.current
     Canvas(modifier) {
         val w = size.width
         val h = size.height
@@ -163,14 +163,14 @@ private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, modifier:
             lineTo(firstX, h)
             close()
         }
-        drawPath(fill, Brush.verticalGradient(listOf(Accent.copy(alpha = 0.22f), Color.Transparent)))
+        drawPath(fill, Brush.verticalGradient(listOf(pal.accent.copy(alpha = 0.22f), Color.Transparent)))
         drawPath(
             line,
-            brush = Brush.horizontalGradient(AccentRamp),
+            brush = Brush.horizontalGradient(pal.accentRamp),
             style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
         val lastV = points.last { !it.isNaN() }
-        drawCircle(Accent, radius = 3.dp.toPx(), center = Offset(lastX, py(lastV)))
+        drawCircle(pal.accent, radius = 3.dp.toPx(), center = Offset(lastX, py(lastV)))
     }
 }
 

@@ -35,8 +35,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.corewatch.ui.theme.Accent
-import com.corewatch.ui.theme.AccentRamp
+import com.corewatch.ui.theme.LocalPalette
 import com.corewatch.ui.theme.Panel
 import com.corewatch.ui.theme.PanelBorder
 import com.corewatch.ui.theme.TextLabel
@@ -88,7 +87,8 @@ fun MetricValue(
     gradient: Boolean = false,
 ) {
     val base = MaterialTheme.typography.displaySmall.mono().copy(fontWeight = FontWeight.SemiBold)
-    val style = if (gradient) base.copy(brush = Brush.linearGradient(AccentRamp)) else base.copy(color = color)
+    val style = if (gradient) base.copy(brush = Brush.linearGradient(LocalPalette.current.accentRamp))
+    else base.copy(color = color)
     Row(verticalAlignment = Alignment.Bottom) {
         Text(text = value, style = style, maxLines = 1)
         Spacer(Modifier.width(5.dp))
@@ -128,7 +128,7 @@ private fun androidx.compose.animation.core.InfiniteTransition.animateFloatValue
 
 @Composable
 fun LiveBadge(live: Boolean) {
-    val color = if (live) Accent else MaterialTheme.colorScheme.onSurfaceVariant
+    val color = if (live) LocalPalette.current.accent else MaterialTheme.colorScheme.onSurfaceVariant
     Row(verticalAlignment = Alignment.CenterVertically) {
         GlowDot(color = color, pulse = live)
         Spacer(Modifier.width(7.dp))
@@ -155,7 +155,7 @@ fun InfoCell(label: String, value: String, modifier: Modifier = Modifier) {
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-            color = Accent,
+            color = LocalPalette.current.accent,
         )
     }
 }
@@ -163,6 +163,7 @@ fun InfoCell(label: String, value: String, modifier: Modifier = Modifier) {
 /** Sparkline with a gradient stroke and a soft gradient fill below the line. */
 @Composable
 fun Sparkline(values: List<Float>, modifier: Modifier = Modifier) {
+    val pal = LocalPalette.current
     Canvas(modifier) {
         if (values.size < 2) return@Canvas
         val minV = values.min()
@@ -185,12 +186,12 @@ fun Sparkline(values: List<Float>, modifier: Modifier = Modifier) {
         drawPath(
             path = fill,
             brush = Brush.verticalGradient(
-                listOf(Accent.copy(alpha = 0.28f), Color.Transparent),
+                listOf(pal.accent.copy(alpha = 0.28f), Color.Transparent),
             ),
         )
         drawPath(
             path = line,
-            brush = Brush.horizontalGradient(AccentRamp),
+            brush = Brush.horizontalGradient(pal.accentRamp),
             style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
     }

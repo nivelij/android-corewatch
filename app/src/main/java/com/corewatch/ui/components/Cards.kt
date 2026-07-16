@@ -7,6 +7,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,11 +21,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,14 +52,16 @@ import com.corewatch.monitor.CpuClock
 import com.corewatch.monitor.DeviceInfo
 import com.corewatch.monitor.LiveMetrics
 import com.corewatch.monitor.Plug
-import com.corewatch.ui.theme.Accent
-import com.corewatch.ui.theme.AccentRamp
+import com.corewatch.ui.theme.LocalPalette
+import com.corewatch.ui.theme.paletteFor
 import com.corewatch.ui.theme.Panel
 import com.corewatch.ui.theme.PanelBorder
 import com.corewatch.ui.theme.StatusHot
 import com.corewatch.ui.theme.StatusNormal
 import com.corewatch.ui.theme.StatusWarm
 import com.corewatch.ui.theme.TextPrimary
+import com.corewatch.ui.theme.ThemeCatalog
+import com.corewatch.ui.theme.ThemeId
 import com.corewatch.ui.theme.mono
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -72,6 +79,7 @@ private fun bytesToGb(bytes: Long): String = String.format("%.1f", bytes / 1_073
  */
 @Composable
 fun CoreGlyph(diameter: Dp, modifier: Modifier = Modifier) {
+    val pal = LocalPalette.current
     Canvas(modifier.size(diameter)) {
         val cx = size.width / 2f
         val cy = size.height / 2f
@@ -89,7 +97,7 @@ fun CoreGlyph(diameter: Dp, modifier: Modifier = Modifier) {
         hex.close()
         drawPath(
             path = hex,
-            brush = Brush.linearGradient(AccentRamp),
+            brush = Brush.linearGradient(pal.accentRamp),
             style = Stroke(width = stroke, join = StrokeJoin.Round),
         )
 
@@ -104,7 +112,7 @@ fun CoreGlyph(diameter: Dp, modifier: Modifier = Modifier) {
         }
         drawPath(
             path = wave,
-            color = Accent,
+            color = pal.accent,
             style = Stroke(width = stroke * 0.9f, cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
     }
@@ -114,11 +122,12 @@ fun CoreGlyph(diameter: Dp, modifier: Modifier = Modifier) {
 
 @Composable
 fun IdentityHeader(info: DeviceInfo, modifier: Modifier = Modifier, compact: Boolean = false) {
+    val pal = LocalPalette.current
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(24.dp),
         color = Panel,
-        border = BorderStroke(1.dp, Brush.linearGradient(AccentRamp.map { it.copy(alpha = 0.45f) })),
+        border = BorderStroke(1.dp, Brush.linearGradient(pal.accentRamp.map { it.copy(alpha = 0.45f) })),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(if (compact) 14.dp else 20.dp),
@@ -139,7 +148,7 @@ fun IdentityHeader(info: DeviceInfo, modifier: Modifier = Modifier, compact: Boo
                 Text(
                     text = info.socLabel,
                     style = MaterialTheme.typography.titleSmall,
-                    color = Accent,
+                    color = pal.accent,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(2.dp))
@@ -222,8 +231,8 @@ private fun coreIntensity(mhz: Int, lo: Int, hi: Int): Float =
 @Composable
 private fun CoreTile(core: Int, mhz: Int, intensity: Float, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(14.dp)
-    // Idle cores stay dim; boosting cores glow gold.
-    val fill = Accent.copy(alpha = 0.10f + 0.42f * intensity)
+    // Idle cores stay dim; boosting cores glow in the active accent.
+    val fill = LocalPalette.current.accent.copy(alpha = 0.10f + 0.42f * intensity)
     Column(
         modifier = modifier
             .clip(shape)
@@ -284,6 +293,7 @@ private fun tempStatus(tempC: Float): TempStatus = when {
 
 @Composable
 fun BatteryCard(battery: BatteryInfo, modifier: Modifier = Modifier) {
+    val pal = LocalPalette.current
     val tempC = battery.tempC
     val status = tempC?.let { tempStatus(it) }
     val tempColor by animateColorAsState(
@@ -294,7 +304,7 @@ fun BatteryCard(battery: BatteryInfo, modifier: Modifier = Modifier) {
         label = "Battery",
         modifier = modifier,
         // Subtle pulsing "power in" cue when charging; the full state is spelled out below.
-        trailing = { if (battery.isCharging) GlowDot(color = Accent, pulse = true) },
+        trailing = { if (battery.isCharging) GlowDot(color = pal.accent, pulse = true) },
     ) {
         MetricValue(
             value = tempC?.let { String.format("%.1f", it) } ?: "—",
@@ -310,10 +320,16 @@ fun BatteryCard(battery: BatteryInfo, modifier: Modifier = Modifier) {
         battery.currentMa?.let { ma ->
             Spacer(Modifier.height(3.dp))
             val sign = if (ma > 0) "+" else if (ma < 0) "-" else ""
+            // Pair current with instantaneous power (V × A) when voltage is available.
+            val power = battery.powerW
+            val text = buildString {
+                append(sign).append(formatCurrent(abs(ma)))
+                if (power != null) append("  ·  ").append(String.format("%.2f W", abs(power)))
+            }
             Text(
-                text = "$sign${formatCurrent(abs(ma))}",
+                text = text,
                 style = MaterialTheme.typography.titleMedium.mono(),
-                color = if (battery.isCharging) Accent else MaterialTheme.colorScheme.onSurface,
+                color = if (battery.isCharging) pal.accent else MaterialTheme.colorScheme.onSurface,
             )
         }
     }
@@ -355,6 +371,7 @@ fun SystemInfoPanel(info: DeviceInfo, modifier: Modifier = Modifier) {
         "SoC vendor" to (info.socManufacturer ?: "—"),
         "SoC model" to (info.socModelRaw ?: "—"),
         "CPU cores" to info.cores.toString(),
+        "GPU" to (info.gpuRenderer ?: "—"),
         "Architecture" to info.abi,
         "Clock range" to clockRange,
         "Android" to "${info.androidRelease} · API ${info.sdkInt}",
@@ -401,7 +418,112 @@ private fun GradientBar(fraction: Float) {
                 .fillMaxHeight()
                 .fillMaxWidth(fraction.coerceIn(0f, 1f))
                 .clip(CircleShape)
-                .background(Brush.horizontalGradient(AccentRamp)),
+                .background(Brush.horizontalGradient(LocalPalette.current.accentRamp)),
         )
     }
+}
+
+/* ---------- accent picker (header chip + popup) ---------- */
+
+/**
+ * The header accent control: a filled hexagon "chip" in the current accent that opens a compact
+ * popup of the available accents. The hexagon echoes CoreWatch's chip glyph — each theme reads as
+ * a chip you slot in, not a generic colour swatch.
+ */
+@Composable
+fun AccentPicker(selected: ThemeId, onSelect: (ThemeId) -> Unit, modifier: Modifier = Modifier) {
+    var open by remember { mutableStateOf(false) }
+    val current = paletteFor(selected)
+    Box(modifier) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { open = true }
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HexSwatch(current.accentRamp, current.accent, size = 20.dp, selected = false, filled = true)
+            Spacer(Modifier.width(3.dp))
+            Text(
+                text = "▾",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
+                SectionLabel("Accent")
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    ThemeCatalog.forEach { p ->
+                        val isSel = p.id == selected
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onSelect(p.id); open = false }
+                                .padding(4.dp),
+                        ) {
+                            HexSwatch(p.accentRamp, p.accent, size = 34.dp, selected = isSel, filled = isSel)
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = p.displayName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isSel) TextPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A hexagon accent chip: filled with the accent gradient, or a hollow accent outline. */
+@Composable
+private fun HexSwatch(
+    ramp: List<Color>,
+    accent: Color,
+    size: Dp,
+    selected: Boolean,
+    filled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier.size(size)) {
+        val cx = this.size.width / 2f
+        val cy = this.size.height / 2f
+        val r = this.size.minDimension * 0.46f
+        val hex = hexPath(cx, cy, r)
+        if (filled) {
+            drawPath(hex, brush = Brush.linearGradient(ramp))
+        } else {
+            drawPath(
+                hex,
+                color = accent.copy(alpha = 0.55f),
+                style = Stroke(width = this.size.minDimension * 0.09f, join = StrokeJoin.Round),
+            )
+        }
+        if (selected) {
+            drawPath(
+                hex,
+                color = accent,
+                style = Stroke(width = this.size.minDimension * 0.10f, join = StrokeJoin.Round),
+            )
+        }
+    }
+}
+
+/** Pointy-top hexagon, matching the CoreWatch logo glyph. */
+private fun hexPath(cx: Float, cy: Float, r: Float): Path {
+    val path = Path()
+    intArrayOf(-90, -30, 30, 90, 150, 210).forEachIndexed { i, deg ->
+        val a = Math.toRadians(deg.toDouble())
+        val x = cx + (r * cos(a)).toFloat()
+        val y = cy + (r * sin(a)).toFloat()
+        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    path.close()
+    return path
 }
