@@ -2,10 +2,15 @@ package com.corewatch
 
 import android.app.Application
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.corewatch.monitor.DeviceInfo
@@ -65,6 +70,26 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     var historyIntervalSec by mutableIntStateOf(HISTORY_BASE_INTERVAL_SEC)
         private set
 
+    // ---- Whole-session battery aggregates (since launch). ----
+
+    private var batteryTempMinC by mutableStateOf<Float?>(null)
+    private var batteryTempMaxC by mutableStateOf<Float?>(null)
+    private var batteryEnergyMwh by mutableFloatStateOf(0f)
+    private var batteryElapsedSec by mutableIntStateOf(0)
+
+    /** Snapshot of the session battery stats; reads the backing state so it recomposes on change. */
+    val batterySession: BatterySession
+        get() = BatterySession(
+            minTempC = batteryTempMinC,
+            maxTempC = batteryTempMaxC,
+            energyMwh = batteryEnergyMwh,
+            avgPowerW = if (batteryElapsedSec > 0) {
+                (batteryEnergyMwh / 1000f) / (batteryElapsedSec / 3600f)
+            } else {
+                null
+            },
+        )
+
     init {
         // Independent recorder so history accumulates for the whole session, regardless of
         // whether the tiles are currently subscribed.
@@ -74,6 +99,16 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
                 ramTotalBytes = sample.ramTotalBytes
                 cpuHistory.add(sample.cpu.currentMaxMhz?.toFloat() ?: Float.NaN)
                 ramHistory.add(sample.ramUsedBytes.toFloat())
+
+                // Battery session aggregates.
+                sample.battery.tempC?.let { t ->
+                    batteryTempMinC = batteryTempMinC?.let { min(it, t) } ?: t
+                    batteryTempMaxC = batteryTempMaxC?.let { max(it, t) } ?: t
+                }
+                sample.battery.powerW?.let { p ->
+                    batteryEnergyMwh += abs(p) * (historyIntervalSec / 3600f) * 1000f
+                }
+                batteryElapsedSec += historyIntervalSec
                 if (cpuHistory.size > HISTORY_MAX_POINTS) {
                     decimate(cpuHistory)
                     decimate(ramHistory)
@@ -92,3 +127,11 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         series.addAll(kept)
     }
 }
+
+/** Whole-session battery aggregates since launch. */
+data class BatterySession(
+    val minTempC: Float?,
+    val maxTempC: Float?,
+    val avgPowerW: Float?,
+    val energyMwh: Float,
+)

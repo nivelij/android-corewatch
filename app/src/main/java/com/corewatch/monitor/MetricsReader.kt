@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.os.PowerManager
+import android.os.SystemClock
 import java.io.File
 import kotlin.math.abs
 
@@ -16,6 +18,9 @@ data class CpuClock(
     val currentMaxMhz: Int?,
     /** Per-core current frequency in MHz (live mode only). */
     val perCoreMhz: List<Int>,
+    /** Per-core busy fraction 0..1 from /proc/stat; `NaN` per core if unknown. Often readable even
+     *  when the clock nodes are SELinux-blocked. Empty on the first sample (needs a delta). */
+    val perCoreLoad: List<Float>,
     /** Cluster minimum frequency in MHz (usually readable even when live is blocked). */
     val minMhz: Int?,
     /** Cluster maximum frequency in MHz. */
@@ -23,13 +28,30 @@ data class CpuClock(
     val cores: Int,
 ) {
     companion object {
-        val EMPTY = CpuClock(false, null, emptyList(), null, null, 0)
+        val EMPTY = CpuClock(false, null, emptyList(), emptyList(), null, null, 0)
     }
 }
 
 enum class ChargeStatus { CHARGING, DISCHARGING, FULL, NOT_CHARGING, UNKNOWN }
 
 enum class Plug { AC, USB, WIRELESS, NONE }
+
+enum class BatteryHealth { GOOD, OVERHEAT, DEAD, OVER_VOLTAGE, COLD, FAILURE, UNKNOWN }
+
+/** Thermal throttling severity, mirroring PowerManager.THERMAL_STATUS_*. */
+enum class ThermalStatus { NONE, LIGHT, MODERATE, SEVERE, CRITICAL, EMERGENCY, SHUTDOWN, UNKNOWN }
+
+/** Device thermal state for a single sample. */
+data class ThermalInfo(
+    val status: ThermalStatus,
+    /** Thermal headroom toward the throttling threshold: ~0 = cool, 1.0 = at threshold, >1 =
+     *  throttling. `null` when the platform can't report it. */
+    val headroom: Float?,
+) {
+    companion object {
+        val EMPTY = ThermalInfo(ThermalStatus.UNKNOWN, null)
+    }
+}
 
 /** Battery state for a single sample. */
 data class BatteryInfo(
@@ -42,6 +64,7 @@ data class BatteryInfo(
     val currentMa: Int?,
     /** Battery voltage in millivolts, or `null` when unavailable. */
     val voltageMv: Int?,
+    val health: BatteryHealth,
 ) {
     val isCharging: Boolean get() = status == ChargeStatus.CHARGING
 
@@ -50,7 +73,7 @@ data class BatteryInfo(
         get() = if (voltageMv != null && currentMa != null) voltageMv * currentMa / 1_000_000f else null
 
     companion object {
-        val EMPTY = BatteryInfo(null, ChargeStatus.UNKNOWN, Plug.NONE, null, null, null)
+        val EMPTY = BatteryInfo(null, ChargeStatus.UNKNOWN, Plug.NONE, null, null, null, BatteryHealth.UNKNOWN)
     }
 }
 
@@ -60,9 +83,10 @@ data class LiveMetrics(
     val ramUsedBytes: Long,
     val ramTotalBytes: Long,
     val battery: BatteryInfo,
+    val thermal: ThermalInfo,
 ) {
     companion object {
-        val EMPTY = LiveMetrics(CpuClock.EMPTY, 0L, 0L, BatteryInfo.EMPTY)
+        val EMPTY = LiveMetrics(CpuClock.EMPTY, 0L, 0L, BatteryInfo.EMPTY, ThermalInfo.EMPTY)
     }
 }
 
@@ -76,6 +100,18 @@ class MetricsReader(context: Context) {
     private val batteryManager: BatteryManager by lazy {
         appContext.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
     }
+    private val powerManager: PowerManager by lazy {
+        appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+    }
+
+    // Previous /proc/stat per-core counters, for computing busy fraction between samples.
+    private var prevCpuTotals: LongArray? = null
+    private var prevCpuIdles: LongArray? = null
+
+    // Cached thermal headroom — getThermalHeadroom returns NaN if polled faster than ~1/s, so we
+    // query it at most every HEADROOM_QUERY_INTERVAL_MS and reuse the last good value in between.
+    private var lastHeadroom: Float? = null
+    private var lastHeadroomAtMs: Long = 0L
 
     /** Number of logical CPUs, discovered from sysfs with a Runtime fallback. */
     val coreCount: Int = run {
@@ -88,11 +124,72 @@ class MetricsReader(context: Context) {
     fun sample(): LiveMetrics {
         val (used, total) = readRam()
         return LiveMetrics(
-            cpu = readCpuClock(),
+            cpu = readCpuClock().copy(perCoreLoad = readCpuLoad()),
             ramUsedBytes = used,
             ramTotalBytes = total,
             battery = readBattery(),
+            thermal = readThermal(),
         )
+    }
+
+    /**
+     * Per-core busy fraction (0..1) from /proc/stat, as a delta since the previous call. Returns
+     * an empty list on the very first call (no baseline yet). Synchronized because [sample] is
+     * invoked from more than one coroutine.
+     */
+    @Synchronized
+    private fun readCpuLoad(): List<Float> {
+        val lines = try {
+            File("/proc/stat").readLines()
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        val totals = LongArray(coreCount) { -1L }
+        val idles = LongArray(coreCount) { -1L }
+        for (line in lines) {
+            if (!line.startsWith("cpu")) continue
+            val parts = line.trim().split(Regex("\\s+"))
+            val idx = parts[0].removePrefix("cpu").toIntOrNull() ?: continue // skips the "cpu" total
+            if (idx !in 0 until coreCount) continue
+            val nums = parts.drop(1).mapNotNull { it.toLongOrNull() }
+            if (nums.size < 5) continue
+            idles[idx] = nums[3] + nums[4]      // idle + iowait
+            totals[idx] = nums.sum()
+        }
+        val prevT = prevCpuTotals
+        val prevI = prevCpuIdles
+        prevCpuTotals = totals
+        prevCpuIdles = idles
+        if (prevT == null || prevI == null) return emptyList()
+        return (0 until coreCount).map { i ->
+            if (totals[i] < 0 || prevT[i] < 0) return@map Float.NaN
+            val dTotal = totals[i] - prevT[i]
+            val dIdle = idles[i] - prevI[i]
+            if (dTotal <= 0) 0f else ((dTotal - dIdle).toFloat() / dTotal).coerceIn(0f, 1f)
+        }
+    }
+
+    @Synchronized
+    private fun readThermal(): ThermalInfo {
+        val status = when (powerManager.currentThermalStatus) {
+            PowerManager.THERMAL_STATUS_NONE -> ThermalStatus.NONE
+            PowerManager.THERMAL_STATUS_LIGHT -> ThermalStatus.LIGHT
+            PowerManager.THERMAL_STATUS_MODERATE -> ThermalStatus.MODERATE
+            PowerManager.THERMAL_STATUS_SEVERE -> ThermalStatus.SEVERE
+            PowerManager.THERMAL_STATUS_CRITICAL -> ThermalStatus.CRITICAL
+            PowerManager.THERMAL_STATUS_EMERGENCY -> ThermalStatus.EMERGENCY
+            PowerManager.THERMAL_STATUS_SHUTDOWN -> ThermalStatus.SHUTDOWN
+            else -> ThermalStatus.UNKNOWN
+        }
+        // Only re-query once the rate-limit window has passed; otherwise keep the last good value
+        // so the UI gauge stays put instead of blinking to null between samples.
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastHeadroomAtMs >= HEADROOM_QUERY_INTERVAL_MS) {
+            lastHeadroomAtMs = now
+            val hr = runCatching { powerManager.getThermalHeadroom(0) }.getOrDefault(Float.NaN)
+            if (!hr.isNaN() && hr >= 0f) lastHeadroom = hr
+        }
+        return ThermalInfo(status, lastHeadroom)
     }
 
     /** @return used bytes to total bytes. */
@@ -144,7 +241,17 @@ class MetricsReader(context: Context) {
         val voltageMv = (intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1)
             .takeIf { it in 1..20_000 }
 
-        return BatteryInfo(tempC, status, plug, levelPct, currentMa, voltageMv)
+        val health = when (intent?.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)) {
+            BatteryManager.BATTERY_HEALTH_GOOD -> BatteryHealth.GOOD
+            BatteryManager.BATTERY_HEALTH_OVERHEAT -> BatteryHealth.OVERHEAT
+            BatteryManager.BATTERY_HEALTH_DEAD -> BatteryHealth.DEAD
+            BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> BatteryHealth.OVER_VOLTAGE
+            BatteryManager.BATTERY_HEALTH_COLD -> BatteryHealth.COLD
+            BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> BatteryHealth.FAILURE
+            else -> BatteryHealth.UNKNOWN
+        }
+
+        return BatteryInfo(tempC, status, plug, levelPct, currentMa, voltageMv, health)
     }
 
     fun readCpuClock(): CpuClock {
@@ -162,6 +269,7 @@ class MetricsReader(context: Context) {
             live = live,
             currentMaxMhz = perCore.maxOrNull(),
             perCoreMhz = perCore,
+            perCoreLoad = emptyList(), // merged in by sample(); readCpuClock() is also used for static facts
             minMhz = if (minKHz != Long.MAX_VALUE) (minKHz / 1000).toInt() else null,
             maxMhz = if (maxKHz > 0) (maxKHz / 1000).toInt() else null,
             cores = coreCount,
@@ -182,5 +290,7 @@ class MetricsReader(context: Context) {
     private companion object {
         // 50 MHz floor: real cores idle far above this; filters emulator junk like "1"/"2" kHz.
         const val MIN_PLAUSIBLE_KHZ = 50_000L
+        // getThermalHeadroom must not be polled faster than ~1/s (else NaN); keep a safe margin.
+        const val HEADROOM_QUERY_INTERVAL_MS = 1_500L
     }
 }
