@@ -15,6 +15,8 @@ data class DeviceInfo(
     val abi: String,
     val minClockMhz: Int?,
     val maxClockMhz: Int?,
+    /** GPU model from OpenGL (e.g. "Adreno (TM) 740"), or null if it couldn't be read. */
+    val gpuRenderer: String?,
     val androidRelease: String,
     val sdkInt: Int,
     val securityPatch: String?,
@@ -52,6 +54,7 @@ data class DeviceInfo(
                 abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
                 minClockMhz = clock.minMhz,
                 maxClockMhz = clock.maxMhz,
+                gpuRenderer = GpuInfo.read().renderer,
                 androidRelease = Build.VERSION.RELEASE ?: "?",
                 sdkInt = Build.VERSION.SDK_INT,
                 securityPatch = Build.VERSION.SECURITY_PATCH?.takeIf { it.isNotBlank() },

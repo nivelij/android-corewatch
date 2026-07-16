@@ -40,10 +40,17 @@ data class BatteryInfo(
     /** Instantaneous current in mA, signed: `+` = into the battery (charging), `-` = draining.
      *  `null` when the device doesn't expose CURRENT_NOW. */
     val currentMa: Int?,
+    /** Battery voltage in millivolts, or `null` when unavailable. */
+    val voltageMv: Int?,
 ) {
     val isCharging: Boolean get() = status == ChargeStatus.CHARGING
+
+    /** Instantaneous power in watts (V × A), signed like [currentMa]; `null` if either is missing. */
+    val powerW: Float?
+        get() = if (voltageMv != null && currentMa != null) voltageMv * currentMa / 1_000_000f else null
+
     companion object {
-        val EMPTY = BatteryInfo(null, ChargeStatus.UNKNOWN, Plug.NONE, null, null)
+        val EMPTY = BatteryInfo(null, ChargeStatus.UNKNOWN, Plug.NONE, null, null, null)
     }
 }
 
@@ -133,7 +140,11 @@ class MetricsReader(context: Context) {
             if (status == ChargeStatus.DISCHARGING) -mag else mag
         }
 
-        return BatteryInfo(tempC, status, plug, levelPct, currentMa)
+        // EXTRA_VOLTAGE is in mV; reject 0/implausible readings (a few devices report junk).
+        val voltageMv = (intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1)
+            .takeIf { it in 1..20_000 }
+
+        return BatteryInfo(tempC, status, plug, levelPct, currentMa, voltageMv)
     }
 
     fun readCpuClock(): CpuClock {
