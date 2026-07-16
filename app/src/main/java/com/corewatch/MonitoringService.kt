@@ -1,5 +1,6 @@
 package com.corewatch
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -39,11 +40,22 @@ class MonitoringService : Service() {
         return START_STICKY
     }
 
-    /** Full, deliberate shutdown: stop collection, drop the notification, stop the service. */
+    /** Full, deliberate shutdown: stop collection, clear the task from Recents, drop everything. */
     private fun gracefulStop() {
         SessionCollector.stop()
+        // Remove the app's card from Recents so Stop truly exits (not just stops the service).
+        runCatching {
+            (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
+                .appTasks.forEach { it.finishAndRemoveTask() }
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /** Swiping the app out of Recents fully stops monitoring and clears the notification. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        gracefulStop()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
