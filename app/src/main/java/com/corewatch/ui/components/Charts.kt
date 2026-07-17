@@ -3,7 +3,9 @@ package com.corewatch.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +33,7 @@ import com.corewatch.ui.theme.mono
 private fun mhzToGhz(mhz: Float): String = String.format("%.2f GHz", mhz / 1000f)
 private fun bytesToGb(bytes: Float): String = String.format("%.1f GB", bytes / 1_073_741_824f)
 private fun degC(t: Float): String = String.format("%.1f °C", t)
+private fun watts(w: Float): String = String.format("%.2f W", w) // signed: −draining, +charging
 
 /** Both session charts, stacked. Renders whatever data exists so far this session. */
 @Composable
@@ -40,6 +43,7 @@ fun HistoryCharts(
     ramPoints: List<Float>,
     ramTotalBytes: Long,
     tempPoints: List<Float>,
+    powerPoints: List<Float>,
     gaps: List<Int>,
     intervalSec: Int,
     modifier: Modifier = Modifier,
@@ -56,39 +60,42 @@ fun HistoryCharts(
     val tempLo = minOf(TEMP_BAND_LOW, tempValid.minOrNull() ?: TEMP_BAND_LOW)
     val tempHi = maxOf(TEMP_BAND_HIGH, tempValid.maxOrNull() ?: TEMP_BAND_HIGH)
 
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        MetricChartCard(
-            label = "CPU history",
-            points = cpuPoints,
-            yMin = 0f,
-            yMax = cpuTop,
-            gaps = gaps,
-            intervalSec = intervalSec,
-            format = ::mhzToGhz,
-        )
-        MetricChartCard(
-            label = "Memory history",
-            points = ramPoints,
-            yMin = 0f,
-            yMax = ramTop,
-            gaps = gaps,
-            intervalSec = intervalSec,
-            format = ::bytesToGb,
-        )
-        MetricChartCard(
-            label = "Battery temperature",
-            points = tempPoints,
-            yMin = tempLo,
-            yMax = tempHi,
-            gaps = gaps,
-            intervalSec = intervalSec,
-            format = ::degC,
-        )
+    // Power is signed watts; always keep 0 in view so draining (−) vs charging (+) reads honestly,
+    // then pad so a nearly-flat trace isn't dead against the axis.
+    val powerValid = powerPoints.filter { !it.isNaN() }
+    var powerLo = minOf(0f, powerValid.minOrNull() ?: 0f)
+    var powerHi = maxOf(0f, powerValid.maxOrNull() ?: 0f)
+    if (powerHi - powerLo < 1f) powerHi = powerLo + 1f
+
+    // Wired once, placed into a 2×2 grid on wide screens (landscape) or a single column otherwise.
+    val cards = listOf<@Composable (Modifier) -> Unit>(
+        { m -> MetricChartCard("CPU history", cpuPoints, 0f, cpuTop, gaps, intervalSec, ::mhzToGhz, m) },
+        { m -> MetricChartCard("Memory history", ramPoints, 0f, ramTop, gaps, intervalSec, ::bytesToGb, m) },
+        { m -> MetricChartCard("Battery temperature", tempPoints, tempLo, tempHi, gaps, intervalSec, ::degC, m) },
+        { m -> MetricChartCard("Power draw", powerPoints, powerLo, powerHi, gaps, intervalSec, ::watts, m) },
+    )
+
+    BoxWithConstraints(modifier) {
+        if (maxWidth >= GRID_MIN_WIDTH) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                cards.chunked(2).forEach { rowCards ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        rowCards.forEach { card -> card(Modifier.weight(1f)) }
+                        if (rowCards.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                cards.forEach { card -> card(Modifier.fillMaxWidth()) }
+            }
+        }
     }
 }
 
 private const val TEMP_BAND_LOW = 20f
 private const val TEMP_BAND_HIGH = 50f
+private val GRID_MIN_WIDTH = 460.dp
 
 @Composable
 private fun MetricChartCard(
@@ -99,6 +106,7 @@ private fun MetricChartCard(
     gaps: List<Int>,
     intervalSec: Int,
     format: (Float) -> String,
+    modifier: Modifier = Modifier,
 ) {
     val current = points.lastOrNull { !it.isNaN() }
     val validCount = points.count { !it.isNaN() }
@@ -106,6 +114,7 @@ private fun MetricChartCard(
 
     Panel(
         label = label,
+        modifier = modifier,
         trailing = {
             Text(
                 text = current?.let(format) ?: "—",

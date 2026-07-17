@@ -58,6 +58,7 @@ import com.corewatch.ui.components.IdentityHeader
 import com.corewatch.ui.components.RamCard
 import com.corewatch.ui.components.PowerThermalCard
 import com.corewatch.ui.components.SystemInfoPanel
+import com.corewatch.ui.components.SystemSpecsDialog
 import com.corewatch.ui.components.AccentPicker
 import com.corewatch.ui.components.BackgroundGuardBanner
 import com.corewatch.ui.theme.LocalPalette
@@ -145,6 +146,7 @@ fun CoreWatchScreen(
                 ramPoints = viewModel.ramHistory,
                 ramTotalBytes = viewModel.ramTotalBytes,
                 tempPoints = viewModel.tempHistory,
+                powerPoints = viewModel.powerHistory,
                 gaps = viewModel.gapIndices,
                 intervalSec = viewModel.historyIntervalSec,
                 modifier = Modifier.fillMaxWidth(),
@@ -202,41 +204,34 @@ private fun LandscapeLayout(
     selectedTheme: ThemeId,
     onThemeChange: (ThemeId) -> Unit,
 ) {
+    // Device specs live behind the identity "spec plate" instead of a permanent half-width column,
+    // so the full width serves the live instrument content.
+    var specsOpen by remember { mutableStateOf(false) }
     Column(modifier) {
         Header(selectedTheme, onThemeChange)
-        guard()
         Spacer(Modifier.height(GAP))
-        Row(
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(GAP),
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(GAP),
         ) {
-            // Left: live telemetry — all three tiles visible; charts below (scroll to reveal).
-            Column(
-                modifier = Modifier.weight(1.15f).fillMaxHeight().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(GAP),
+            guard()
+            IdentityHeader(info, Modifier.fillMaxWidth(), compact = true, onClick = { specsOpen = true })
+            Row(
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(GAP),
             ) {
-                IdentityHeader(info, Modifier.fillMaxWidth(), compact = true)
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(GAP),
-                ) {
-                    CpuCard(metrics.cpu, history, Modifier.weight(1f).fillMaxHeight())
-                    RamCard(metrics, Modifier.weight(1f).fillMaxHeight())
-                }
-                if (metrics.cpu.hasPerCoreData) {
-                    CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
-                }
-                PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth())
-                charts()
+                CpuCard(metrics.cpu, history, Modifier.weight(1f).fillMaxHeight())
+                RamCard(metrics, Modifier.weight(1f).fillMaxHeight())
             }
-            // Right: static system info (scrolls if the screen is short).
-            Column(
-                modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
-            ) {
-                SystemInfoPanel(info, Modifier.fillMaxWidth())
+            if (metrics.cpu.hasPerCoreData) {
+                CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
             }
+            PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth())
+            charts()
+            Spacer(Modifier.height(20.dp))
         }
     }
+    if (specsOpen) SystemSpecsDialog(info) { specsOpen = false }
 }
 
 /** Whether the kernel exposed any per-core signal (clock or load) worth showing. */

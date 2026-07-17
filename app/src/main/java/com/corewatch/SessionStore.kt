@@ -17,7 +17,7 @@ import java.io.File
 internal object SessionStore {
 
     private const val FILE = "session.bin"
-    private const val VERSION = 2
+    private const val VERSION = 3
     private const val MAX_SERIES_POINTS = 100_000 // sanity bound when reading a possibly-corrupt file
 
     private fun file(context: Context) = File(context.filesDir, FILE)
@@ -37,6 +37,7 @@ internal object SessionStore {
                 writeSeries(out, s.cpu)   // peak clock (MHz) per tick
                 writeSeries(out, s.ram)   // used bytes per tick
                 writeSeries(out, s.temp)  // battery °C per tick
+                writeSeries(out, s.power) // battery power W (signed) per tick
                 out.writeInt(s.gaps.size) // indices where the process was killed then resumed
                 for (g in s.gaps) out.writeInt(g)
             }
@@ -65,8 +66,9 @@ internal object SessionStore {
                 val cpu = readSeries(inp) ?: return null
                 val ram = readSeries(inp) ?: return null
                 val temp = readSeries(inp) ?: return null
+                val power = readSeries(inp) ?: return null
                 val gaps = readInts(inp) ?: return null
-                SessionSnapshot(interval, ramTotal, cpu, ram, temp, min, max, energy, elapsed, gaps)
+                SessionSnapshot(interval, ramTotal, cpu, ram, temp, power, min, max, energy, elapsed, gaps)
             }
         } catch (_: Exception) {
             null
@@ -106,6 +108,7 @@ data class SessionSnapshot(
     val cpu: List<Float>,
     val ram: List<Float>,
     val temp: List<Float>,
+    val power: List<Float>,
     val battMinTempC: Float?,
     val battMaxTempC: Float?,
     val battEnergyMwh: Float,

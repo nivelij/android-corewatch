@@ -64,6 +64,7 @@ object SessionCollector {
     val cpuHistory = mutableStateListOf<Float>()
     val ramHistory = mutableStateListOf<Float>()
     val tempHistory = mutableStateListOf<Float>()
+    val powerHistory = mutableStateListOf<Float>() // battery power in W, signed (+ charging, − draining)
 
     /**
      * Series indices marking a discontinuity: the point where a previous (killed) session ended and
@@ -118,6 +119,7 @@ object SessionCollector {
                 cpuHistory.add(sample.cpu.currentMaxMhz?.toFloat() ?: Float.NaN)
                 ramHistory.add(sample.ramUsedBytes.toFloat())
                 tempHistory.add(sample.battery.tempC ?: Float.NaN)
+                powerHistory.add(sample.battery.powerW ?: Float.NaN)
 
                 sample.battery.tempC?.let { t ->
                     batteryTempMinC = batteryTempMinC?.let { min(it, t) } ?: t
@@ -132,6 +134,7 @@ object SessionCollector {
                     decimate(cpuHistory)
                     decimate(ramHistory)
                     decimate(tempHistory)
+                    decimate(powerHistory)
                     remapGapsAfterDecimate(cpuHistory.size)
                     historyIntervalSec *= 2
                 }
@@ -150,6 +153,7 @@ object SessionCollector {
         cpuHistory.clear()
         ramHistory.clear()
         tempHistory.clear()
+        powerHistory.clear()
         ramTotalBytes = 0L
         historyIntervalSec = HISTORY_BASE_INTERVAL_SEC
         batteryTempMinC = null
@@ -166,6 +170,7 @@ object SessionCollector {
         cpu = cpuHistory.toList(),
         ram = ramHistory.toList(),
         temp = tempHistory.toList(),
+        power = powerHistory.toList(),
         battMinTempC = batteryTempMinC,
         battMaxTempC = batteryTempMaxC,
         battEnergyMwh = batteryEnergyMwh,
@@ -188,6 +193,7 @@ object SessionCollector {
         cpuHistory.addAll(snap.cpu)
         ramHistory.addAll(snap.ram)
         tempHistory.addAll(snap.temp)
+        powerHistory.addAll(snap.power)
         batteryTempMinC = snap.battMinTempC
         batteryTempMaxC = snap.battMaxTempC
         batteryEnergyMwh = snap.battEnergyMwh

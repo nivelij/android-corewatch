@@ -8,6 +8,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,6 +49,9 @@ import kotlin.math.sin
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.corewatch.BatterySession
 import com.corewatch.monitor.BatteryHealth
 import com.corewatch.monitor.BatteryInfo
@@ -57,6 +63,7 @@ import com.corewatch.monitor.Plug
 import com.corewatch.monitor.ThermalInfo
 import com.corewatch.monitor.ThermalStatus
 import com.corewatch.ui.theme.LocalPalette
+import com.corewatch.ui.theme.OledBlack
 import com.corewatch.ui.theme.paletteFor
 import com.corewatch.ui.theme.Panel
 import com.corewatch.ui.theme.PanelBorder
@@ -126,10 +133,16 @@ fun CoreGlyph(diameter: Dp, modifier: Modifier = Modifier) {
 /* ---------- hero identity ---------- */
 
 @Composable
-fun IdentityHeader(info: DeviceInfo, modifier: Modifier = Modifier, compact: Boolean = false) {
+fun IdentityHeader(
+    info: DeviceInfo,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    onClick: (() -> Unit)? = null,
+) {
     val pal = LocalPalette.current
+    val clickable = if (onClick != null) modifier.clickable(onClick = onClick) else modifier
     Surface(
-        modifier = modifier,
+        modifier = clickable,
         shape = RoundedCornerShape(24.dp),
         color = Panel,
         border = BorderStroke(1.dp, Brush.linearGradient(pal.accentRamp.map { it.copy(alpha = 0.45f) })),
@@ -140,7 +153,7 @@ fun IdentityHeader(info: DeviceInfo, modifier: Modifier = Modifier, compact: Boo
         ) {
             CoreGlyph(diameter = if (compact) 44.dp else 60.dp)
             Spacer(Modifier.width(if (compact) 14.dp else 18.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(
                     text = info.deviceName,
                     style = if (compact) MaterialTheme.typography.titleMedium
@@ -161,6 +174,52 @@ fun IdentityHeader(info: DeviceInfo, modifier: Modifier = Modifier, compact: Boo
                     text = "${info.abi} · ${info.cores} cores",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // "Spec plate" cue: the identity card doubles as the door to the full device sheet.
+            if (onClick != null) {
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = "SPECS ›",
+                    style = MaterialTheme.typography.labelMedium.mono(),
+                    color = pal.accent,
+                    letterSpacing = 1.sp,
+                )
+            }
+        }
+    }
+}
+
+/** The full device spec sheet, reached on demand by tapping the identity "spec plate". */
+@Composable
+fun SystemSpecsDialog(info: DeviceInfo, onDismiss: () -> Unit) {
+    // Opt out of the narrow platform-default width so the two-column spec grid has room to breathe.
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.62f),
+            shape = RoundedCornerShape(24.dp),
+            color = OledBlack,
+            border = BorderStroke(1.dp, PanelBorder),
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+            ) {
+                SystemInfoPanel(info, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "Close",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = LocalPalette.current.accent,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
         }
