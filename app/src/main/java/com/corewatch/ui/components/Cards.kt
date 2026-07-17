@@ -436,11 +436,15 @@ fun PowerThermalCard(
                 )
                 battery.currentMa?.let { ma ->
                     Spacer(Modifier.height(3.dp))
-                    val sign = if (ma > 0) "+" else if (ma < 0) "-" else ""
-                    val power = battery.powerW
+                    // On battery: discharge current + positive draw. Plugged in: charge current (+),
+                    // and draw reads n/a since the battery isn't the thing being consumed.
                     val text = buildString {
-                        append(sign).append(formatCurrent(abs(ma)))
-                        if (power != null) append(" · ").append(String.format("%.2f W", abs(power)))
+                        if (battery.onBattery) {
+                            append(formatCurrent(abs(ma)))
+                            append(" · ").append(battery.drawW?.let { String.format("%.2f W", it) } ?: "—")
+                        } else {
+                            append("+").append(formatCurrent(abs(ma))).append(" · n/a")
+                        }
                     }
                     Text(
                         text = text,

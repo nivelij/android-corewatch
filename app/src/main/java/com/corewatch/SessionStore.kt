@@ -17,7 +17,10 @@ import java.io.File
 internal object SessionStore {
 
     private const val FILE = "session.bin"
-    private const val VERSION = 3
+    // v4: the `power` series changed from signed watts (− draining) to positive draw with NaN while
+    // charging, and battEnergy/battElapsed became discharge-only. Bumping invalidates pre-change
+    // snapshots so a killed old session restores as empty instead of being misread.
+    private const val VERSION = 4
     private const val MAX_SERIES_POINTS = 100_000 // sanity bound when reading a possibly-corrupt file
 
     private fun file(context: Context) = File(context.filesDir, FILE)
@@ -37,7 +40,7 @@ internal object SessionStore {
                 writeSeries(out, s.cpu)   // peak clock (MHz) per tick
                 writeSeries(out, s.ram)   // used bytes per tick
                 writeSeries(out, s.temp)  // battery °C per tick
-                writeSeries(out, s.power) // battery power W (signed) per tick
+                writeSeries(out, s.power) // battery draw W (≥0 on battery, NaN charging) per tick
                 out.writeInt(s.gaps.size) // indices where the process was killed then resumed
                 for (g in s.gaps) out.writeInt(g)
             }

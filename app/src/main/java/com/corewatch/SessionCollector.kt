@@ -25,7 +25,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -64,7 +63,7 @@ object SessionCollector {
     val cpuHistory = mutableStateListOf<Float>()
     val ramHistory = mutableStateListOf<Float>()
     val tempHistory = mutableStateListOf<Float>()
-    val powerHistory = mutableStateListOf<Float>() // battery power in W, signed (+ charging, − draining)
+    val powerHistory = mutableStateListOf<Float>() // battery draw in W, ≥0 on battery; NaN while charging
 
     /**
      * Series indices marking a discontinuity: the point where a previous (killed) session ended and
@@ -82,15 +81,15 @@ object SessionCollector {
     private var batteryTempMinC by mutableStateOf<Float?>(null)
     private var batteryTempMaxC by mutableStateOf<Float?>(null)
     private var batteryEnergyMwh by mutableFloatStateOf(0f)
-    private var batteryElapsedSec by mutableIntStateOf(0)
+    private var batteryDischargeSec by mutableIntStateOf(0)
 
     val batterySession: BatterySession
         get() = BatterySession(
             minTempC = batteryTempMinC,
             maxTempC = batteryTempMaxC,
             energyMwh = batteryEnergyMwh,
-            avgPowerW = if (batteryElapsedSec > 0) {
-                (batteryEnergyMwh / 1000f) / (batteryElapsedSec / 3600f)
+            avgPowerW = if (batteryDischargeSec > 0) {
+                (batteryEnergyMwh / 1000f) / (batteryDischargeSec / 3600f)
             } else {
                 null
             },
@@ -119,16 +118,20 @@ object SessionCollector {
                 cpuHistory.add(sample.cpu.currentMaxMhz?.toFloat() ?: Float.NaN)
                 ramHistory.add(sample.ramUsedBytes.toFloat())
                 tempHistory.add(sample.battery.tempC ?: Float.NaN)
-                powerHistory.add(sample.battery.powerW ?: Float.NaN)
+                // Power *draw* only exists on battery; while charging it's N/A (NaN → chart break).
+                val drawW = sample.battery.drawW
+                powerHistory.add(drawW ?: Float.NaN)
 
                 sample.battery.tempC?.let { t ->
                     batteryTempMinC = batteryTempMinC?.let { min(it, t) } ?: t
                     batteryTempMaxC = batteryTempMaxC?.let { max(it, t) } ?: t
                 }
-                sample.battery.powerW?.let { p ->
-                    batteryEnergyMwh += abs(p) * (historyIntervalSec / 3600f) * 1000f
+                // Energy + time accrue only while discharging, so Energy = drawn-from-battery and
+                // Avg = average draw, not diluted by charging / idle-plugged stretches.
+                if (drawW != null) {
+                    batteryEnergyMwh += drawW * (historyIntervalSec / 3600f) * 1000f
+                    batteryDischargeSec += historyIntervalSec
                 }
-                batteryElapsedSec += historyIntervalSec
 
                 if (cpuHistory.size > HISTORY_MAX_POINTS) {
                     decimate(cpuHistory)
@@ -159,7 +162,7 @@ object SessionCollector {
         batteryTempMinC = null
         batteryTempMaxC = null
         batteryEnergyMwh = 0f
-        batteryElapsedSec = 0
+        batteryDischargeSec = 0
         gapIndices.clear()
         if (::appContext.isInitialized) SessionStore.clear(appContext)
     }
@@ -174,7 +177,7 @@ object SessionCollector {
         battMinTempC = batteryTempMinC,
         battMaxTempC = batteryTempMaxC,
         battEnergyMwh = batteryEnergyMwh,
-        battElapsedSec = batteryElapsedSec,
+        battElapsedSec = batteryDischargeSec,
         gaps = gapIndices.toList(),
     )
 
@@ -197,7 +200,7 @@ object SessionCollector {
         batteryTempMinC = snap.battMinTempC
         batteryTempMaxC = snap.battMaxTempC
         batteryEnergyMwh = snap.battEnergyMwh
-        batteryElapsedSec = snap.battElapsedSec
+        batteryDischargeSec = snap.battElapsedSec
         // The seam sits between the last restored point and the first upcoming live point.
         val boundary = cpuHistory.size
         if (boundary > 0) gapIndices.add(boundary)

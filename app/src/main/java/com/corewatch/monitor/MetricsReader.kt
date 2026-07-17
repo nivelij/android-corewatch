@@ -72,6 +72,14 @@ data class BatteryInfo(
     val powerW: Float?
         get() = if (voltageMv != null && currentMa != null) voltageMv * currentMa / 1_000_000f else null
 
+    /** Running on battery (nothing plugged in) — the only state where power is real consumption. */
+    val onBattery: Boolean get() = plug == Plug.NONE
+
+    /** Power *draw* in watts, always ≥ 0; `null` while charging/plugged (draw is N/A then) or if
+     *  voltage/current is unavailable. This is the consumption metric the charts and tiles show. */
+    val drawW: Float?
+        get() = if (onBattery) powerW?.let { abs(it) } else null
+
     companion object {
         val EMPTY = BatteryInfo(null, ChargeStatus.UNKNOWN, Plug.NONE, null, null, null, BatteryHealth.UNKNOWN)
     }
