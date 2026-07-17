@@ -242,9 +242,15 @@ class MetricsReader(context: Context) {
             if (status == ChargeStatus.DISCHARGING) -milliAmps else milliAmps
         }
 
-        // EXTRA_VOLTAGE is in mV; reject 0/implausible readings (a few devices report junk).
-        val voltageMv = (intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1)
-            .takeIf { it in 1..20_000 }
+        // EXTRA_VOLTAGE is documented in mV, but some OEMs (e.g. Oppo/ColorOS) report whole volts
+        // (e.g. 4 instead of ~4300), which collapses the power calc to ~0. Normalise: a value already
+        // in the Li-ion mV band is used as-is; a small value is volts → ×1000; anything else is junk.
+        val rawVoltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
+        val voltageMv = when {
+            rawVoltage in 2_500..20_000 -> rawVoltage
+            rawVoltage in 1..99 -> rawVoltage * 1000
+            else -> null
+        }
 
         val health = when (intent?.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)) {
             BatteryManager.BATTERY_HEALTH_GOOD -> BatteryHealth.GOOD
