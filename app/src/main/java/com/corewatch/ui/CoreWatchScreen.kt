@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -36,11 +38,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.content.Context
 import android.os.SystemClock
 import android.widget.Toast
 import com.corewatch.BatterySession
 import com.corewatch.MonitorViewModel
 import com.corewatch.R
+import com.corewatch.ignoreBatteryOptimizationsIntent
+import com.corewatch.isIgnoringBatteryOptimizations
 import com.corewatch.monitor.CpuClock
 import com.corewatch.monitor.DeviceInfo
 import com.corewatch.monitor.LiveMetrics
@@ -54,6 +59,7 @@ import com.corewatch.ui.components.RamCard
 import com.corewatch.ui.components.PowerThermalCard
 import com.corewatch.ui.components.SystemInfoPanel
 import com.corewatch.ui.components.AccentPicker
+import com.corewatch.ui.components.BackgroundGuardBanner
 import com.corewatch.ui.theme.LocalPalette
 import com.corewatch.ui.theme.TextPrimary
 import com.corewatch.ui.theme.ThemeId
@@ -61,6 +67,8 @@ import com.corewatch.ui.theme.mono
 
 private const val HISTORY_SIZE = 60
 private const val BACK_EXIT_WINDOW_MS = 2_000L
+private const val PREFS = "corewatch"
+private const val KEY_GUARD_DISMISSED = "batt_opt_dismissed"
 private val GAP = 14.dp
 
 @Composable
@@ -96,6 +104,27 @@ fun CoreWatchScreen(
         }
     }
 
+    // Battery-optimization guard: prompt to allowlist the app so background capture isn't cut short.
+    // Hidden once the exemption is granted or the user dismisses it for this session.
+    val prefs = remember { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
+    var guardDismissed by remember { mutableStateOf(prefs.getBoolean(KEY_GUARD_DISMISSED, false)) }
+    var ignoringBattOpt by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    val exemptionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { ignoringBattOpt = isIgnoringBatteryOptimizations(context) }
+    val guard: @Composable () -> Unit = {
+        if (!ignoringBattOpt && !guardDismissed) {
+            BackgroundGuardBanner(
+                onAllow = { exemptionLauncher.launch(ignoreBatteryOptimizationsIntent(context)) },
+                onDismiss = {
+                    guardDismissed = true
+                    prefs.edit().putBoolean(KEY_GUARD_DISMISSED, true).apply()
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+
     val pal = LocalPalette.current
     BoxWithConstraints(
         Modifier
@@ -116,15 +145,16 @@ fun CoreWatchScreen(
                 ramPoints = viewModel.ramHistory,
                 ramTotalBytes = viewModel.ramTotalBytes,
                 tempPoints = viewModel.tempHistory,
+                gaps = viewModel.gapIndices,
                 intervalSec = viewModel.historyIntervalSec,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
 
         if (wide) {
-            LandscapeLayout(outer, info, metrics, session, history, charts, selectedTheme, onThemeChange)
+            LandscapeLayout(outer, info, metrics, session, history, charts, guard, selectedTheme, onThemeChange)
         } else {
-            PortraitLayout(outer, info, metrics, session, history, charts, selectedTheme, onThemeChange)
+            PortraitLayout(outer, info, metrics, session, history, charts, guard, selectedTheme, onThemeChange)
         }
     }
 }
@@ -137,6 +167,7 @@ private fun PortraitLayout(
     session: BatterySession,
     history: List<Float>,
     charts: @Composable () -> Unit,
+    guard: @Composable () -> Unit,
     selectedTheme: ThemeId,
     onThemeChange: (ThemeId) -> Unit,
 ) {
@@ -145,6 +176,7 @@ private fun PortraitLayout(
         verticalArrangement = Arrangement.spacedBy(GAP),
     ) {
         Header(selectedTheme, onThemeChange)
+        guard()
         IdentityHeader(info, Modifier.fillMaxWidth())
         CpuCard(metrics.cpu, history, Modifier.fillMaxWidth())
         if (metrics.cpu.hasPerCoreData) {
@@ -166,11 +198,13 @@ private fun LandscapeLayout(
     session: BatterySession,
     history: List<Float>,
     charts: @Composable () -> Unit,
+    guard: @Composable () -> Unit,
     selectedTheme: ThemeId,
     onThemeChange: (ThemeId) -> Unit,
 ) {
     Column(modifier) {
         Header(selectedTheme, onThemeChange)
+        guard()
         Spacer(Modifier.height(GAP))
         Row(
             modifier = Modifier.fillMaxWidth().weight(1f),

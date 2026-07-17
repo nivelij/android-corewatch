@@ -22,6 +22,7 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     val cpuHistory: List<Float> get() = SessionCollector.cpuHistory
     val ramHistory: List<Float> get() = SessionCollector.ramHistory
     val tempHistory: List<Float> get() = SessionCollector.tempHistory
+    val gapIndices: List<Int> get() = SessionCollector.gapIndices
     val ramTotalBytes: Long get() = SessionCollector.ramTotalBytes
     val historyIntervalSec: Int get() = SessionCollector.historyIntervalSec
     val batterySession: BatterySession get() = SessionCollector.batterySession

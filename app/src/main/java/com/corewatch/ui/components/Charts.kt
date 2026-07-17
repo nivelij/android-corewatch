@@ -18,12 +18,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.corewatch.ui.theme.LocalPalette
 import com.corewatch.ui.theme.PanelBorder
+import com.corewatch.ui.theme.StatusWarm
 import com.corewatch.ui.theme.mono
 
 private fun mhzToGhz(mhz: Float): String = String.format("%.2f GHz", mhz / 1000f)
@@ -38,6 +40,7 @@ fun HistoryCharts(
     ramPoints: List<Float>,
     ramTotalBytes: Long,
     tempPoints: List<Float>,
+    gaps: List<Int>,
     intervalSec: Int,
     modifier: Modifier = Modifier,
 ) {
@@ -59,6 +62,7 @@ fun HistoryCharts(
             points = cpuPoints,
             yMin = 0f,
             yMax = cpuTop,
+            gaps = gaps,
             intervalSec = intervalSec,
             format = ::mhzToGhz,
         )
@@ -67,6 +71,7 @@ fun HistoryCharts(
             points = ramPoints,
             yMin = 0f,
             yMax = ramTop,
+            gaps = gaps,
             intervalSec = intervalSec,
             format = ::bytesToGb,
         )
@@ -75,6 +80,7 @@ fun HistoryCharts(
             points = tempPoints,
             yMin = tempLo,
             yMax = tempHi,
+            gaps = gaps,
             intervalSec = intervalSec,
             format = ::degC,
         )
@@ -90,11 +96,13 @@ private fun MetricChartCard(
     points: List<Float>,
     yMin: Float,
     yMax: Float,
+    gaps: List<Int>,
     intervalSec: Int,
     format: (Float) -> String,
 ) {
     val current = points.lastOrNull { !it.isNaN() }
     val validCount = points.count { !it.isNaN() }
+    val gapCount = gaps.count { it in 1 until points.size }
 
     Panel(
         label = label,
@@ -115,7 +123,7 @@ private fun MetricChartCard(
                     modifier = Modifier.align(Alignment.Center),
                 )
             } else {
-                ChartCanvas(points, yMin, yMax, Modifier.fillMaxSize())
+                ChartCanvas(points, yMin, yMax, gaps, Modifier.fillMaxSize())
                 Text(
                     text = format(yMax),
                     style = MaterialTheme.typography.labelSmall,
@@ -131,8 +139,9 @@ private fun MetricChartCard(
             }
         }
         Spacer(Modifier.size(8.dp))
+        val base = "whole session · every ${intervalSec}s · ${sessionSpan(points.size, intervalSec)}"
         Text(
-            text = "whole session · every ${intervalSec}s · ${sessionSpan(points.size, intervalSec)}",
+            text = if (gapCount > 0) "$base · dashed line = app was stopped, then resumed" else base,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -140,7 +149,7 @@ private fun MetricChartCard(
 }
 
 @Composable
-private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, modifier: Modifier) {
+private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, gaps: List<Int>, modifier: Modifier) {
     val pal = LocalPalette.current
     Canvas(modifier) {
         val w = size.width
@@ -154,12 +163,15 @@ private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, modifier:
         fun px(i: Int) = if (n > 1) i.toFloat() / (n - 1) * w else 0f
         fun py(v: Float) = h - ((v - yMin) / range).coerceIn(0f, 1f) * h
 
+        val gapSet = gaps.filter { it in 1 until n }.toHashSet()
         val line = Path()
         var started = false
         var firstX = 0f
         var lastX = 0f
         var any = false
         points.forEachIndexed { i, v ->
+            // Break the line at a resume boundary so restored and live runs never connect.
+            if (i in gapSet) started = false
             if (v.isNaN()) {
                 started = false
             } else {
@@ -190,6 +202,26 @@ private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, modifier:
         )
         val lastV = points.last { !it.isNaN() }
         drawCircle(pal.accent, radius = 3.dp.toPx(), center = Offset(lastX, py(lastV)))
+
+        // Explicit interruption markers: a dashed vertical rule + a small cap at each seam where
+        // recording stopped and later resumed, so a restored run never looks continuous.
+        gapSet.forEach { g ->
+            val x = (px(g - 1) + px(g)) / 2f
+            drawLine(
+                color = StatusWarm.copy(alpha = 0.75f),
+                start = Offset(x, 0f),
+                end = Offset(x, h),
+                strokeWidth = 1.5.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
+            )
+            val cap = 4.dp.toPx()
+            drawPath(
+                Path().apply {
+                    moveTo(x - cap, 0f); lineTo(x + cap, 0f); lineTo(x, cap * 1.6f); close()
+                },
+                color = StatusWarm,
+            )
+        }
     }
 }
 

@@ -578,6 +578,72 @@ private fun GradientBar(fraction: Float) {
     }
 }
 
+/* ---------- background-capture guard banner ---------- */
+
+/**
+ * Shown only while CoreWatch is NOT on the battery-optimization allowlist: an instructional prompt
+ * telling the user why background capture can be cut short and exactly what to do about it. Tapping
+ * "Allow" opens the system dialog; the banner self-hides once the exemption is granted.
+ */
+@Composable
+fun BackgroundGuardBanner(
+    onAllow: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = modifier
+            .clip(shape)
+            .background(Panel)
+            .border(BorderStroke(1.dp, StatusWarm.copy(alpha = 0.40f)), shape)
+            .padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(Modifier.padding(top = 5.dp).size(8.dp).clip(CircleShape).background(StatusWarm))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "Keep capturing during games",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = "Android can stop CoreWatch when a game needs memory, cutting your " +
+                    "session short. Tap Allow, then pick “Allow” / “Don’t optimize” so it can " +
+                    "keep recording in the background.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Allow",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = LocalPalette.current.accent,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onAllow)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "Not now",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextMuted,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
 /* ---------- accent picker (header chip + popup) ---------- */
 
 /**

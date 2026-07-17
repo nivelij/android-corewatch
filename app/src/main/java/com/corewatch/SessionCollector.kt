@@ -45,6 +45,7 @@ object SessionCollector {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var reader: MetricsReader
+    private lateinit var appContext: Context
 
     /** Device identity + SoC facts; read once when collection first starts. */
     lateinit var deviceInfo: DeviceInfo
@@ -63,6 +64,13 @@ object SessionCollector {
     val cpuHistory = mutableStateListOf<Float>()
     val ramHistory = mutableStateListOf<Float>()
     val tempHistory = mutableStateListOf<Float>()
+
+    /**
+     * Series indices marking a discontinuity: the point where a previous (killed) session ended and
+     * a resumed one picks up. The charts draw an explicit "app was stopped / resumed" break here, so
+     * a restored session never masquerades as continuous recording.
+     */
+    val gapIndices = mutableStateListOf<Int>()
 
     var ramTotalBytes by mutableLongStateOf(0L)
         private set
@@ -89,11 +97,18 @@ object SessionCollector {
 
     private var recorderJob: Job? = null
 
-    /** Idempotent: initialises the reader on first call and starts the session recorder. */
+    /**
+     * Idempotent: initialises the reader on first call (restoring any persisted session) and starts
+     * the recorder. `@Synchronized` because the foreground service and the ViewModel can both call
+     * this from different threads on a fresh (post-kill) process — without it they could double-init.
+     */
+    @Synchronized
     fun start(context: Context) {
         if (!::reader.isInitialized) {
-            reader = MetricsReader(context.applicationContext)
-            deviceInfo = DeviceInfo.read(context.applicationContext, reader)
+            appContext = context.applicationContext
+            reader = MetricsReader(appContext)
+            deviceInfo = DeviceInfo.read(appContext, reader)
+            restoreSession()
         }
         if (recorderJob?.isActive == true) return
         recorderJob = scope.launch {
@@ -117,14 +132,18 @@ object SessionCollector {
                     decimate(cpuHistory)
                     decimate(ramHistory)
                     decimate(tempHistory)
+                    remapGapsAfterDecimate(cpuHistory.size)
                     historyIntervalSec *= 2
                 }
+                // Persist after each tick so a kill loses at most one interval of data.
+                withContext(Dispatchers.IO) { SessionStore.save(appContext, snapshot()) }
                 delay(historyIntervalSec * 1_000L)
             }
         }
     }
 
-    /** Stops the recorder and clears the session (used on explicit app exit). */
+    /** Stops the recorder and clears the session, on disk too (used on explicit app exit). */
+    @Synchronized
     fun stop() {
         recorderJob?.cancel()
         recorderJob = null
@@ -137,6 +156,52 @@ object SessionCollector {
         batteryTempMaxC = null
         batteryEnergyMwh = 0f
         batteryElapsedSec = 0
+        gapIndices.clear()
+        if (::appContext.isInitialized) SessionStore.clear(appContext)
+    }
+
+    private fun snapshot() = SessionSnapshot(
+        historyIntervalSec = historyIntervalSec,
+        ramTotalBytes = ramTotalBytes,
+        cpu = cpuHistory.toList(),
+        ram = ramHistory.toList(),
+        temp = tempHistory.toList(),
+        battMinTempC = batteryTempMinC,
+        battMaxTempC = batteryTempMaxC,
+        battEnergyMwh = batteryEnergyMwh,
+        battElapsedSec = batteryElapsedSec,
+        gaps = gapIndices.toList(),
+    )
+
+    /**
+     * Reload a session persisted before an OS kill. The restored points seed the same chart series
+     * the UI observes; a gap boundary is recorded at the seam so the resumed run is drawn as an
+     * explicit "stopped here / resumed here" break, never as continuous recording.
+     */
+    private fun restoreSession() {
+        val snap = SessionStore.load(appContext) ?: return
+        if (snap.cpu.isEmpty() && snap.ram.isEmpty() && snap.temp.isEmpty()) return
+        historyIntervalSec = snap.historyIntervalSec.coerceAtLeast(HISTORY_BASE_INTERVAL_SEC)
+        ramTotalBytes = snap.ramTotalBytes
+        // Prior gaps from earlier kills stay valid — they index into the restored data.
+        gapIndices.addAll(snap.gaps)
+        cpuHistory.addAll(snap.cpu)
+        ramHistory.addAll(snap.ram)
+        tempHistory.addAll(snap.temp)
+        batteryTempMinC = snap.battMinTempC
+        batteryTempMaxC = snap.battMaxTempC
+        batteryEnergyMwh = snap.battEnergyMwh
+        batteryElapsedSec = snap.battElapsedSec
+        // The seam sits between the last restored point and the first upcoming live point.
+        val boundary = cpuHistory.size
+        if (boundary > 0) gapIndices.add(boundary)
+    }
+
+    /** Series were halved (step 2), so every gap index maps to i/2; drop any that fall out of range. */
+    private fun remapGapsAfterDecimate(newSize: Int) {
+        val mapped = gapIndices.map { it / 2 }.distinct().filter { it in 1 until newSize }
+        gapIndices.clear()
+        gapIndices.addAll(mapped)
     }
 
     /** Halve a series by keeping every other point — preserves whole-session coverage, bounded. */
