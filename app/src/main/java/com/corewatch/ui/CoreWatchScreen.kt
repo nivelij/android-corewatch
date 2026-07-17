@@ -177,7 +177,7 @@ private fun PortraitLayout(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(GAP),
     ) {
-        Header(selectedTheme, onThemeChange)
+        Header(info.appVersion, selectedTheme, onThemeChange)
         guard()
         IdentityHeader(info, Modifier.fillMaxWidth())
         CpuCard(metrics.cpu, history, Modifier.fillMaxWidth())
@@ -208,7 +208,7 @@ private fun LandscapeLayout(
     // so the full width serves the live instrument content.
     var specsOpen by remember { mutableStateOf(false) }
     Column(modifier) {
-        Header(selectedTheme, onThemeChange)
+        Header(info.appVersion, selectedTheme, onThemeChange)
         Spacer(Modifier.height(GAP))
         Column(
             modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
@@ -239,19 +239,27 @@ private val CpuClock.hasPerCoreData: Boolean
     get() = perCoreMhz.isNotEmpty() || perCoreLoad.any { !it.isNaN() }
 
 @Composable
-private fun Header(selectedTheme: ThemeId, onThemeChange: (ThemeId) -> Unit) {
+private fun Header(appVersion: String, selectedTheme: ThemeId, onThemeChange: (ThemeId) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         CoreGlyph(diameter = 26.dp)
         Spacer(Modifier.width(10.dp))
-        Text(
-            text = "CoreWatch",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = TextPrimary,
-        )
+        Column {
+            Text(
+                text = "CoreWatch",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+            )
+            Text(
+                text = "v$appVersion",
+                style = MaterialTheme.typography.labelSmall.mono(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                letterSpacing = 1.sp,
+            )
+        }
         Spacer(Modifier.weight(1f))
         AccentPicker(selectedTheme, onThemeChange)
         Spacer(Modifier.width(12.dp))

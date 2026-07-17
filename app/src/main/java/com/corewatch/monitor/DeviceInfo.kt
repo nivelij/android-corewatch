@@ -21,6 +21,8 @@ data class DeviceInfo(
     val sdkInt: Int,
     val securityPatch: String?,
     val kernel: String?,
+    /** CoreWatch's own versionName (from the installed package), e.g. "0.5.5". */
+    val appVersion: String,
 ) {
     /** Best label for the SoC: marketing name if known, else the raw codename, else manufacturer. */
     val socLabel: String
@@ -59,6 +61,9 @@ data class DeviceInfo(
                 sdkInt = Build.VERSION.SDK_INT,
                 securityPatch = Build.VERSION.SECURITY_PATCH?.takeIf { it.isNotBlank() },
                 kernel = System.getProperty("os.version")?.takeIf { it.isNotBlank() },
+                appVersion = runCatching {
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                }.getOrNull()?.takeIf { it.isNotBlank() } ?: "—",
             )
         }
     }

@@ -591,6 +591,7 @@ fun SystemInfoPanel(info: DeviceInfo, modifier: Modifier = Modifier) {
         "Android" to "${info.androidRelease} · API ${info.sdkInt}",
         "Security patch" to (info.securityPatch ?: "—"),
         "Kernel" to (info.kernel ?: "—"),
+        "App version" to "CoreWatch ${info.appVersion}",
     )
 
     Panel(label = "System", modifier = modifier) {

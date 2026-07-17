@@ -75,6 +75,8 @@ fun HistoryCharts(
         { m -> MetricChartCard("Power draw", powerPoints, powerLo, powerHi, gaps, intervalSec, ::watts, m) },
     )
 
+    // 2×2 grid only when there's room (landscape / tablets); phone portrait stacks one chart per
+    // row so each stays wide enough to read.
     BoxWithConstraints(modifier) {
         if (maxWidth >= GRID_MIN_WIDTH) {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {

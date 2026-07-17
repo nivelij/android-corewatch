@@ -228,13 +228,18 @@ class MetricsReader(context: Context) {
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
         val levelPct = if (level >= 0 && scale > 0) level * 100 / scale else null
 
-        // CURRENT_NOW is µA; its sign is device-specific, so derive direction from status instead.
-        val rawMicroAmp = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
-        val currentMa = if (rawMicroAmp == Int.MIN_VALUE) {
+        // CURRENT_NOW units aren't standardized: AOSP documents µA (Ayn Odin, most devices), but
+        // several OEMs — notably BBK (Oppo/OnePlus/Realme/Vivo) — report mA. Dividing an mA reading
+        // by 1000 truncates e.g. 450 → 0, so power reads a flat 0 W. Disambiguate by magnitude:
+        // real battery current is tens of thousands of µA and up, but only tens–thousands in mA,
+        // so a raw value below the threshold is already mA. Sign is device-specific → use status.
+        val rawCurrent = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+        val currentMa = if (rawCurrent == Int.MIN_VALUE) {
             null
         } else {
-            val mag = abs(rawMicroAmp) / 1000
-            if (status == ChargeStatus.DISCHARGING) -mag else mag
+            val mag = abs(rawCurrent)
+            val milliAmps = if (mag >= CURRENT_MICROAMP_THRESHOLD) mag / 1000 else mag
+            if (status == ChargeStatus.DISCHARGING) -milliAmps else milliAmps
         }
 
         // EXTRA_VOLTAGE is in mV; reject 0/implausible readings (a few devices report junk).
@@ -292,5 +297,9 @@ class MetricsReader(context: Context) {
         const val MIN_PLAUSIBLE_KHZ = 50_000L
         // getThermalHeadroom must not be polled faster than ~1/s (else NaN); keep a safe margin.
         const val HEADROOM_QUERY_INTERVAL_MS = 1_500L
+        // CURRENT_NOW unit split: |raw| ≥ this ⇒ µA (÷1000 → mA); below ⇒ already mA. ~30 mA / 30 A
+        // boundary cleanly separates AOSP µA (active current is far higher) from OEM mA (even fast
+        // charge stays well under 30 A).
+        const val CURRENT_MICROAMP_THRESHOLD = 30_000
     }
 }
