@@ -1,6 +1,8 @@
 package com.corewatch.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,6 +21,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -32,12 +35,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import android.content.Context
 import android.os.SystemClock
 import android.widget.Toast
@@ -83,18 +89,12 @@ fun CoreWatchScreen(
     val info = viewModel.deviceInfo
     val session = viewModel.batterySession
 
+    // Which screen is showing. History is a self-contained stack over the live dashboard.
+    var nav by remember { mutableStateOf<Nav>(Nav.Main) }
+
     // Back exits only on a deliberate double-press; a single back arms a short window.
     val context = LocalContext.current
     var lastBackAt by remember { mutableStateOf(0L) }
-    BackHandler {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastBackAt < BACK_EXIT_WINDOW_MS) {
-            onExit()
-        } else {
-            lastBackAt = now
-            Toast.makeText(context, context.getString(R.string.back_to_exit), Toast.LENGTH_SHORT).show()
-        }
-    }
 
     // Rolling window of recent CPU peak frequencies, feeding the sparkline.
     val history = remember { mutableStateListOf<Float>() }
@@ -126,39 +126,169 @@ fun CoreWatchScreen(
         }
     }
 
-    val pal = LocalPalette.current
-    BoxWithConstraints(
-        Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(pal.bgTop, pal.bgBottom))),
-    ) {
-        val wide = maxWidth >= 600.dp
-        val outer = Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-
-        // Session history charts, wired once and slotted into whichever layout is active.
-        val charts: @Composable () -> Unit = {
-            HistoryCharts(
-                cpuPoints = viewModel.cpuHistory,
-                cpuMaxMhz = info.maxClockMhz,
-                ramPoints = viewModel.ramHistory,
-                ramTotalBytes = viewModel.ramTotalBytes,
-                tempPoints = viewModel.tempHistory,
-                powerPoints = viewModel.powerHistory,
-                gaps = viewModel.gapIndices,
-                intervalSec = viewModel.historyIntervalSec,
-                modifier = Modifier.fillMaxWidth(),
+    when (val n = nav) {
+        Nav.History -> {
+            BackHandler { nav = Nav.Main }
+            HistoryScreen(
+                viewModel = viewModel,
+                onOpenSession = { nav = Nav.Detail(it) },
+                onBack = { nav = Nav.Main },
             )
         }
 
-        if (wide) {
-            LandscapeLayout(outer, info, metrics, session, history, charts, guard, selectedTheme, onThemeChange)
-        } else {
-            PortraitLayout(outer, info, metrics, session, history, charts, guard, selectedTheme, onThemeChange)
+        is Nav.Detail -> {
+            BackHandler { nav = Nav.History }
+            HistoryDetailScreen(viewModel, n.id, onBack = { nav = Nav.History })
+        }
+
+        Nav.Main -> {
+            BackHandler {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastBackAt < BACK_EXIT_WINDOW_MS) {
+                    onExit()
+                } else {
+                    lastBackAt = now
+                    Toast.makeText(context, context.getString(R.string.back_to_exit), Toast.LENGTH_SHORT).show()
+                }
+            }
+            val recording = viewModel.isRecording
+            val pal = LocalPalette.current
+            BoxWithConstraints(
+                Modifier
+                    .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(pal.bgTop, pal.bgBottom))),
+            ) {
+                val wide = maxWidth >= 600.dp
+                val outer = Modifier
+                    .fillMaxSize()
+                    .systemBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+
+                // Live session charts appear only while recording (there's no session otherwise).
+                val sessionBlock: @Composable () -> Unit = {
+                    if (recording) {
+                        HistoryCharts(
+                            cpuPoints = viewModel.cpuHistory,
+                            cpuMaxMhz = info.maxClockMhz,
+                            ramPoints = viewModel.ramHistory,
+                            ramTotalBytes = viewModel.ramTotalBytes,
+                            tempPoints = viewModel.tempHistory,
+                            powerPoints = viewModel.powerHistory,
+                            gaps = viewModel.gapIndices,
+                            intervalSec = viewModel.historyIntervalSec,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+
+                // Fixed Start/Stop control, slotted directly under the device identity.
+                val recordingControl: @Composable () -> Unit = {
+                    RecordingControl(
+                        recording = recording,
+                        startMillis = viewModel.recordingStartMillis,
+                        onStart = { viewModel.startRecording() },
+                        onStop = { viewModel.stopRecording() },
+                    )
+                }
+
+                val openHistory = { nav = Nav.History }
+                if (wide) {
+                    LandscapeLayout(outer, info, metrics, session, history, sessionBlock, recordingControl, guard, selectedTheme, onThemeChange, openHistory, recording)
+                } else {
+                    PortraitLayout(outer, info, metrics, session, history, sessionBlock, recordingControl, guard, selectedTheme, onThemeChange, openHistory, recording)
+                }
+            }
         }
     }
+}
+
+/** In-app navigation for the History stack layered over the live dashboard. */
+private sealed interface Nav {
+    data object Main : Nav
+    data object History : Nav
+    data class Detail(val id: Long) : Nav
+}
+
+/**
+ * The single Start/Stop recording control, fixed just below the device identity. Idle: a prominent
+ * accent "Start recording" button. Recording: a pulsing REC indicator + elapsed timer + Stop.
+ */
+@Composable
+private fun RecordingControl(recording: Boolean, startMillis: Long, onStart: () -> Unit, onStop: () -> Unit) {
+    val pal = LocalPalette.current
+    if (recording) {
+        var now by remember { mutableStateOf(startMillis) }
+        LaunchedEffect(startMillis) {
+            while (true) {
+                now = System.currentTimeMillis()
+                delay(1_000)
+            }
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(pal.accent.copy(alpha = 0.12f))
+                .border(1.dp, pal.accent.copy(alpha = 0.30f), RoundedCornerShape(16.dp))
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            GlowDot(color = pal.accent, pulse = true)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "REC",
+                style = MaterialTheme.typography.labelMedium.mono(),
+                color = pal.accent,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.5.sp,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = elapsedLabel((now - startMillis).coerceAtLeast(0)),
+                style = MaterialTheme.typography.titleMedium.mono(),
+                color = TextPrimary,
+            )
+            Spacer(Modifier.weight(1f))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, pal.accent, RoundedCornerShape(12.dp))
+                    .clickable(onClick = onStop)
+                    .padding(horizontal = 22.dp, vertical = 9.dp),
+            ) {
+                Text(
+                    text = "Stop",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = pal.accent,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    } else {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(pal.accent)
+                .clickable(onClick = onStart)
+                .padding(vertical = 15.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "▶  Start recording",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = Color.Black,
+            )
+        }
+    }
+}
+
+private fun elapsedLabel(ms: Long): String {
+    val s = ms / 1000
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%02d:%02d".format(m, sec)
 }
 
 @Composable
@@ -169,23 +299,27 @@ private fun PortraitLayout(
     session: BatterySession,
     history: List<Float>,
     charts: @Composable () -> Unit,
+    recordingControl: @Composable () -> Unit,
     guard: @Composable () -> Unit,
     selectedTheme: ThemeId,
     onThemeChange: (ThemeId) -> Unit,
+    onOpenHistory: () -> Unit,
+    recording: Boolean,
 ) {
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(GAP),
     ) {
-        Header(info.appVersion, selectedTheme, onThemeChange)
+        Header(info.appVersion, selectedTheme, onThemeChange, onOpenHistory, recording)
         guard()
         IdentityHeader(info, Modifier.fillMaxWidth())
+        recordingControl()
         CpuCard(metrics.cpu, history, Modifier.fillMaxWidth())
         if (metrics.cpu.hasPerCoreData) {
             CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
         }
         RamCard(metrics, Modifier.fillMaxWidth())
-        PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth())
+        PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth(), showSession = recording)
         charts()
         SystemInfoPanel(info, Modifier.fillMaxWidth())
         Spacer(Modifier.height(20.dp))
@@ -200,15 +334,18 @@ private fun LandscapeLayout(
     session: BatterySession,
     history: List<Float>,
     charts: @Composable () -> Unit,
+    recordingControl: @Composable () -> Unit,
     guard: @Composable () -> Unit,
     selectedTheme: ThemeId,
     onThemeChange: (ThemeId) -> Unit,
+    onOpenHistory: () -> Unit,
+    recording: Boolean,
 ) {
     // Device specs live behind the identity "spec plate" instead of a permanent half-width column,
     // so the full width serves the live instrument content.
     var specsOpen by remember { mutableStateOf(false) }
     Column(modifier) {
-        Header(info.appVersion, selectedTheme, onThemeChange)
+        Header(info.appVersion, selectedTheme, onThemeChange, onOpenHistory, recording)
         Spacer(Modifier.height(GAP))
         Column(
             modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
@@ -216,6 +353,7 @@ private fun LandscapeLayout(
         ) {
             guard()
             IdentityHeader(info, Modifier.fillMaxWidth(), compact = true, onClick = { specsOpen = true })
+            recordingControl()
             Row(
                 modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(GAP),
@@ -226,7 +364,7 @@ private fun LandscapeLayout(
             if (metrics.cpu.hasPerCoreData) {
                 CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
             }
-            PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth())
+            PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth(), showSession = recording)
             charts()
             Spacer(Modifier.height(20.dp))
         }
@@ -239,7 +377,13 @@ private val CpuClock.hasPerCoreData: Boolean
     get() = perCoreMhz.isNotEmpty() || perCoreLoad.any { !it.isNaN() }
 
 @Composable
-private fun Header(appVersion: String, selectedTheme: ThemeId, onThemeChange: (ThemeId) -> Unit) {
+private fun Header(
+    appVersion: String,
+    selectedTheme: ThemeId,
+    onThemeChange: (ThemeId) -> Unit,
+    onOpenHistory: () -> Unit,
+    recording: Boolean,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -261,15 +405,19 @@ private fun Header(appVersion: String, selectedTheme: ThemeId, onThemeChange: (T
             )
         }
         Spacer(Modifier.weight(1f))
+        HistoryClockButton(onOpenHistory)
+        Spacer(Modifier.width(4.dp))
         AccentPicker(selectedTheme, onThemeChange)
         Spacer(Modifier.width(12.dp))
         GlowDot(color = LocalPalette.current.accent, pulse = true)
         Spacer(Modifier.width(8.dp))
+        // Tiles are always live; the label calls out when a session is being recorded.
         Text(
-            text = "LIVE · 1s",
+            text = if (recording) "REC" else "LIVE · 1s",
             style = MaterialTheme.typography.labelMedium.mono(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (recording) LocalPalette.current.accent else MaterialTheme.colorScheme.onSurfaceVariant,
             letterSpacing = 1.sp,
+            fontWeight = if (recording) FontWeight.Bold else FontWeight.Normal,
         )
     }
 }

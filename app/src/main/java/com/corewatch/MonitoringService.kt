@@ -27,7 +27,9 @@ class MonitoringService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        SessionCollector.start(applicationContext)
+        // The service only runs while recording (started by the app on "Start recording"); just make
+        // sure the reader is ready. Recording itself is begun by the caller, not here.
+        SessionCollector.ensureInitialized(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -37,12 +39,14 @@ class MonitoringService : Service() {
         }
         // dataSync type works API 29-35 (specialUse would need API 34; minSdk here is 31).
         startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        return START_STICKY
+        // NOT_STICKY: if the process is killed while recording, the session ends (it's recovered and
+        // archived on next launch) rather than the service silently restarting a phantom recording.
+        return START_NOT_STICKY
     }
 
     /** Full, deliberate shutdown: stop collection, clear the task from Recents, drop everything. */
     private fun gracefulStop() {
-        SessionCollector.stop()
+        SessionCollector.stopRecording()
         // Remove the app's card from Recents so Stop truly exits (not just stops the service).
         runCatching {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)

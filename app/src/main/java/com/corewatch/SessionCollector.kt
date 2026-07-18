@@ -31,6 +31,8 @@ import kotlin.math.min
 private const val LIVE_INTERVAL_MS = 1_000L
 private const val HISTORY_BASE_INTERVAL_SEC = 5
 private const val HISTORY_MAX_POINTS = 720   // ~1h @5s before the timeline is compressed
+private const val MIN_ARCHIVE_SEC = 30       // recording is explicit now; only drop a fat-fingered start→stop
+private const val MAX_HISTORY_SESSIONS = 200 // keep the newest N completed sessions on disk
 
 /**
  * Process-scoped telemetry collector. Lives beyond any single Activity so a foreground service can
@@ -77,6 +79,18 @@ object SessionCollector {
     var historyIntervalSec by mutableIntStateOf(HISTORY_BASE_INTERVAL_SEC)
         private set
 
+    // Wall-clock start of the active recording; used to file the run into History on stop. 0 = idle.
+    private var sessionStartMillis = 0L
+    // Wall-clock time of the last recorded tick; the end time when recovering an app-killed recording.
+    private var lastTickMillis = 0L
+
+    /** True while a session is actively recording (foreground service + notification present). */
+    var isRecording by mutableStateOf(false)
+        private set
+
+    /** Start of the active recording, for the UI's elapsed timer; 0 when idle. */
+    val recordingStartMillis: Long get() = if (isRecording) sessionStartMillis else 0L
+
     // ---- Whole-session battery aggregates (since collection started). ----
     private var batteryTempMinC by mutableStateOf<Float?>(null)
     private var batteryTempMaxC by mutableStateOf<Float?>(null)
@@ -98,22 +112,36 @@ object SessionCollector {
     private var recorderJob: Job? = null
 
     /**
-     * Idempotent: initialises the reader on first call (restoring any persisted session) and starts
-     * the recorder. `@Synchronized` because the foreground service and the ViewModel can both call
-     * this from different threads on a fresh (post-kill) process — without it they could double-init.
+     * Initialise the reader + device facts for the live tiles, and recover any recording orphaned by
+     * an app kill (archived, not resumed). Idempotent; does NOT begin recording — so opening the app
+     * shows live data without capturing a session. `@Synchronized` because the service and the
+     * ViewModel can both call it on a fresh process.
      */
     @Synchronized
-    fun start(context: Context) {
-        if (!::reader.isInitialized) {
-            appContext = context.applicationContext
-            reader = MetricsReader(appContext)
-            deviceInfo = DeviceInfo.read(appContext, reader)
-            restoreSession()
-        }
+    fun ensureInitialized(context: Context) {
+        if (::reader.isInitialized) return
+        appContext = context.applicationContext
+        reader = MetricsReader(appContext)
+        deviceInfo = DeviceInfo.read(appContext, reader)
+        recoverOrphanedRecording()
+    }
+
+    /**
+     * Begin an explicit recording: accumulate the history series + battery aggregates, persisting a
+     * snapshot each tick so an app kill loses at most one interval. Idempotent. The caller owns the
+     * foreground service / notification that keeps this alive in the background.
+     */
+    @Synchronized
+    fun startRecording(context: Context) {
+        ensureInitialized(context)
         if (recorderJob?.isActive == true) return
+        isRecording = true
+        sessionStartMillis = System.currentTimeMillis()
+        lastTickMillis = sessionStartMillis
         recorderJob = scope.launch {
             while (isActive) {
                 val sample = withContext(Dispatchers.IO) { reader.sample() }
+                lastTickMillis = System.currentTimeMillis()
                 ramTotalBytes = sample.ramTotalBytes
                 cpuHistory.add(sample.cpu.currentMaxMhz?.toFloat() ?: Float.NaN)
                 ramHistory.add(sample.ramUsedBytes.toFloat())
@@ -148,11 +176,18 @@ object SessionCollector {
         }
     }
 
-    /** Stops the recorder and clears the session, on disk too (used on explicit app exit). */
+    /**
+     * Stop the active recording and clear it (on disk too). Called on an explicit stop — the in-app
+     * Stop control, the notification's Stop, a swipe-away, or app exit. A run that lasted long enough
+     * is finalized into the History archive first. No-op if not recording.
+     */
     @Synchronized
-    fun stop() {
+    fun stopRecording() {
+        if (recorderJob == null && !isRecording) return
         recorderJob?.cancel()
         recorderJob = null
+        archiveIfWorthKeeping()
+        isRecording = false
         cpuHistory.clear()
         ramHistory.clear()
         tempHistory.clear()
@@ -164,7 +199,31 @@ object SessionCollector {
         batteryEnergyMwh = 0f
         batteryDischargeSec = 0
         gapIndices.clear()
+        sessionStartMillis = 0L
+        lastTickMillis = 0L
         if (::appContext.isInitialized) SessionStore.clear(appContext)
+    }
+
+    /**
+     * On an explicit stop, file the just-finished run into the History archive — but only if it ran
+     * at least [MIN_ARCHIVE_SEC] (so momentary app-opens don't clutter the log), then prune to the
+     * newest [MAX_HISTORY_SESSIONS].
+     */
+    private fun archiveIfWorthKeeping() {
+        if (!::appContext.isInitialized || sessionStartMillis == 0L || cpuHistory.isEmpty()) return
+        val end = System.currentTimeMillis()
+        if ((end - sessionStartMillis) / 1000L < MIN_ARCHIVE_SEC) return
+        HistoryStore.archive(
+            appContext,
+            HistorySession(
+                id = sessionStartMillis,
+                startEpochMillis = sessionStartMillis,
+                endEpochMillis = end,
+                cpuMaxMhz = if (::deviceInfo.isInitialized) deviceInfo.maxClockMhz else null,
+                snapshot = snapshot(),
+            ),
+        )
+        HistoryStore.prune(appContext, MAX_HISTORY_SESSIONS)
     }
 
     private fun snapshot() = SessionSnapshot(
@@ -179,31 +238,33 @@ object SessionCollector {
         battEnergyMwh = batteryEnergyMwh,
         battElapsedSec = batteryDischargeSec,
         gaps = gapIndices.toList(),
+        startEpochMillis = sessionStartMillis,
+        lastTickEpochMillis = lastTickMillis,
     )
 
     /**
-     * Reload a session persisted before an OS kill. The restored points seed the same chart series
-     * the UI observes; a gap boundary is recorded at the seam so the resumed run is drawn as an
-     * explicit "stopped here / resumed here" break, never as continuous recording.
+     * A session snapshot left on disk means a recording was in progress when the app was killed. In
+     * the recording model an app kill *ends* the session, so we archive it (if it ran long enough)
+     * rather than resuming — then clear it. Recording always starts off after this.
      */
-    private fun restoreSession() {
+    private fun recoverOrphanedRecording() {
         val snap = SessionStore.load(appContext) ?: return
-        if (snap.cpu.isEmpty() && snap.ram.isEmpty() && snap.temp.isEmpty()) return
-        historyIntervalSec = snap.historyIntervalSec.coerceAtLeast(HISTORY_BASE_INTERVAL_SEC)
-        ramTotalBytes = snap.ramTotalBytes
-        // Prior gaps from earlier kills stay valid — they index into the restored data.
-        gapIndices.addAll(snap.gaps)
-        cpuHistory.addAll(snap.cpu)
-        ramHistory.addAll(snap.ram)
-        tempHistory.addAll(snap.temp)
-        powerHistory.addAll(snap.power)
-        batteryTempMinC = snap.battMinTempC
-        batteryTempMaxC = snap.battMaxTempC
-        batteryEnergyMwh = snap.battEnergyMwh
-        batteryDischargeSec = snap.battElapsedSec
-        // The seam sits between the last restored point and the first upcoming live point.
-        val boundary = cpuHistory.size
-        if (boundary > 0) gapIndices.add(boundary)
+        SessionStore.clear(appContext)
+        if (snap.cpu.isEmpty()) return
+        val start = snap.startEpochMillis
+        val end = snap.lastTickEpochMillis.takeIf { it > 0L } ?: start
+        if (start <= 0L || (end - start) / 1000L < MIN_ARCHIVE_SEC) return
+        HistoryStore.archive(
+            appContext,
+            HistorySession(
+                id = start,
+                startEpochMillis = start,
+                endEpochMillis = end,
+                cpuMaxMhz = if (::deviceInfo.isInitialized) deviceInfo.maxClockMhz else null,
+                snapshot = snap,
+            ),
+        )
+        HistoryStore.prune(appContext, MAX_HISTORY_SESSIONS)
     }
 
     /** Series were halved (step 2), so every gap index maps to i/2; drop any that fall out of range. */

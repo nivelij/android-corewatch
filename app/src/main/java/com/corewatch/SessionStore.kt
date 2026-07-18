@@ -20,7 +20,11 @@ internal object SessionStore {
     // v4: the `power` series changed from signed watts (− draining) to positive draw with NaN while
     // charging, and battEnergy/battElapsed became discharge-only. Bumping invalidates pre-change
     // snapshots so a killed old session restores as empty instead of being misread.
-    private const val VERSION = 4
+    // v5: added startEpochMillis (wall-clock session start) so a resumed run keeps its real start
+    // time — needed to file it into the daily History archive on the eventual explicit stop.
+    // v6: added lastTickEpochMillis so a recording orphaned by an app kill can be recovered and
+    // archived on next launch with an accurate end time.
+    private const val VERSION = 6
     private const val MAX_SERIES_POINTS = 100_000 // sanity bound when reading a possibly-corrupt file
 
     private fun file(context: Context) = File(context.filesDir, FILE)
@@ -31,6 +35,8 @@ internal object SessionStore {
         try {
             DataOutputStream(tmp.outputStream().buffered()).use { out ->
                 out.writeInt(VERSION)
+                out.writeLong(s.startEpochMillis)
+                out.writeLong(s.lastTickEpochMillis)
                 out.writeInt(s.historyIntervalSec)
                 out.writeLong(s.ramTotalBytes)
                 out.writeFloat(s.battMinTempC ?: Float.NaN)
@@ -60,6 +66,8 @@ internal object SessionStore {
         return try {
             DataInputStream(f.inputStream().buffered()).use { inp ->
                 if (inp.readInt() != VERSION) return null
+                val startEpochMillis = inp.readLong()
+                val lastTickEpochMillis = inp.readLong()
                 val interval = inp.readInt()
                 val ramTotal = inp.readLong()
                 val min = inp.readFloat().takeIf { !it.isNaN() }
@@ -71,7 +79,7 @@ internal object SessionStore {
                 val temp = readSeries(inp) ?: return null
                 val power = readSeries(inp) ?: return null
                 val gaps = readInts(inp) ?: return null
-                SessionSnapshot(interval, ramTotal, cpu, ram, temp, power, min, max, energy, elapsed, gaps)
+                SessionSnapshot(interval, ramTotal, cpu, ram, temp, power, min, max, energy, elapsed, gaps, startEpochMillis, lastTickEpochMillis)
             }
         } catch (_: Exception) {
             null
@@ -118,4 +126,9 @@ data class SessionSnapshot(
     val battElapsedSec: Int,
     /** Series indices where the process was killed and later resumed (chart discontinuities). */
     val gaps: List<Int>,
+    /** Wall-clock time the session began; preserved across kill/resume. 0 if unknown (legacy). */
+    val startEpochMillis: Long = 0L,
+    /** Wall-clock time of the most recent recorded tick; used as the end time when recovering an
+     *  app-killed recording. 0 if unknown (legacy). */
+    val lastTickEpochMillis: Long = 0L,
 )

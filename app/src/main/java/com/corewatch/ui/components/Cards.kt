@@ -406,6 +406,8 @@ fun PowerThermalCard(
     thermal: ThermalInfo,
     session: BatterySession,
     modifier: Modifier = Modifier,
+    // The live readings above always show; the per-session aggregates only make sense while recording.
+    showSession: Boolean = true,
 ) {
     val accent = LocalPalette.current.accent
     val tempC = battery.tempC
@@ -476,21 +478,23 @@ fun PowerThermalCard(
             }
         }
 
-        Spacer(Modifier.height(14.dp))
-        HairlineDivider()
-        Spacer(Modifier.height(12.dp))
-        SectionLabel("Session")
-        Spacer(Modifier.height(10.dp))
-        SessionStat3(
-            "Peak" to (session.maxTempC?.let { String.format("%.1f °C", it) } ?: "—"),
-            "Low" to (session.minTempC?.let { String.format("%.1f °C", it) } ?: "—"),
-            "Avg" to (session.avgPowerW?.let { String.format("%.2f W", it) } ?: "—"),
-        )
-        SessionStat3(
-            "Energy" to formatEnergy(session.energyMwh),
-            "Health" to healthLabel(battery.health),
-            null,
-        )
+        if (showSession) {
+            Spacer(Modifier.height(14.dp))
+            HairlineDivider()
+            Spacer(Modifier.height(12.dp))
+            SectionLabel("Session")
+            Spacer(Modifier.height(10.dp))
+            SessionStat3(
+                "Peak" to (session.maxTempC?.let { String.format("%.1f °C", it) } ?: "—"),
+                "Low" to (session.minTempC?.let { String.format("%.1f °C", it) } ?: "—"),
+                "Avg" to (session.avgPowerW?.let { String.format("%.2f W", it) } ?: "—"),
+            )
+            SessionStat3(
+                "Energy" to formatEnergy(session.energyMwh),
+                "Health" to healthLabel(battery.health),
+                null,
+            )
+        }
     }
 }
 

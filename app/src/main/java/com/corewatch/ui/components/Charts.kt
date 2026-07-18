@@ -62,6 +62,9 @@ fun HistoryCharts(
     gaps: List<Int>,
     intervalSec: Int,
     modifier: Modifier = Modifier,
+    // Live dashboard is still filling up ("collecting data…"); a finished archived session that
+    // never captured a metric simply has none ("no data").
+    emptyLabel: String = "collecting data…",
 ) {
     val cpuTop = cpuMaxMhz?.toFloat()
         ?: cpuPoints.filter { !it.isNaN() }.maxOrNull()?.times(1.1f)
@@ -84,10 +87,10 @@ fun HistoryCharts(
 
     // Wired once, placed into a 2×2 grid on wide screens (landscape) or a single column otherwise.
     val cards = listOf<@Composable (Modifier) -> Unit>(
-        { m -> MetricChartCard("CPU history", cpuPoints, 0f, cpuTop, gaps, intervalSec, ::mhzToGhz, m) },
-        { m -> MetricChartCard("Memory history", ramPoints, 0f, ramTop, gaps, intervalSec, ::bytesToGb, m) },
-        { m -> MetricChartCard("Battery temperature", tempPoints, tempLo, tempHi, gaps, intervalSec, ::degC, m) },
-        { m -> MetricChartCard("Power draw", powerPoints, powerLo, powerHi, gaps, intervalSec, ::watts, m, naLabel = "n/a") },
+        { m -> MetricChartCard("CPU history", cpuPoints, 0f, cpuTop, gaps, intervalSec, ::mhzToGhz, m, emptyLabel = emptyLabel) },
+        { m -> MetricChartCard("Memory history", ramPoints, 0f, ramTop, gaps, intervalSec, ::bytesToGb, m, emptyLabel = emptyLabel) },
+        { m -> MetricChartCard("Battery temperature", tempPoints, tempLo, tempHi, gaps, intervalSec, ::degC, m, emptyLabel = emptyLabel) },
+        { m -> MetricChartCard("Power draw", powerPoints, powerLo, powerHi, gaps, intervalSec, ::watts, m, naLabel = "n/a", emptyLabel = emptyLabel) },
     )
 
     // 2×2 grid only when there's room (landscape / tablets); phone portrait stacks one chart per
@@ -125,6 +128,7 @@ private fun MetricChartCard(
     format: (Float) -> String,
     modifier: Modifier = Modifier,
     naLabel: String = "—",
+    emptyLabel: String = "collecting data…",
 ) {
     val current = points.lastOrNull { !it.isNaN() }
     val validCount = points.count { !it.isNaN() }
@@ -147,7 +151,7 @@ private fun MetricChartCard(
         Box(Modifier.fillMaxWidth().height(128.dp)) {
             if (validCount < 2) {
                 Text(
-                    text = "collecting data…",
+                    text = emptyLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),

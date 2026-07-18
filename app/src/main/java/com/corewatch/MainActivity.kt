@@ -36,9 +36,8 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
 
-        // Keep telemetry collection alive while the app is off-screen.
-        ContextCompat.startForegroundService(this, Intent(this, MonitoringService::class.java))
-
+        // Live tiles work without a service; the foreground service + notification only run while
+        // the user is recording (started from the Start-recording control).
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         setContent {
             // Selected theme persists across launches; re-read on each (re)create.
@@ -78,9 +77,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Deliberate exit (double-back): stop collection + service, drop the task. */
+    /** Deliberate exit (double-back): stop any active recording (archiving it) + service, drop the task. */
     private fun exitApp() {
-        SessionCollector.stop()
+        SessionCollector.stopRecording()
         stopService(Intent(this, MonitoringService::class.java))
         finishAndRemoveTask()
     }
