@@ -1,6 +1,8 @@
 package com.corewatch.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -10,13 +12,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -24,8 +34,13 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.corewatch.ui.theme.LocalPalette
+import com.corewatch.ui.theme.Panel
 import com.corewatch.ui.theme.PanelBorder
 import com.corewatch.ui.theme.StatusWarm
 import com.corewatch.ui.theme.mono
@@ -138,19 +153,11 @@ private fun MetricChartCard(
                     modifier = Modifier.align(Alignment.Center),
                 )
             } else {
-                ChartCanvas(points, yMin, yMax, gaps, Modifier.fillMaxSize())
-                Text(
-                    text = format(yMax),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.TopStart),
-                )
-                Text(
-                    text = format(yMin),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.BottomStart),
-                )
+                ChartCanvas(points, yMin, yMax, gaps, format, intervalSec, naLabel, Modifier.fillMaxSize())
+                // Corner axis labels sit on a panel-colored chip so a drifting gap rule (or the
+                // line/fill) passing behind them never bleeds through and makes the value unreadable.
+                AxisLabel(format(yMax), Modifier.align(Alignment.TopStart))
+                AxisLabel(format(yMin), Modifier.align(Alignment.BottomStart))
             }
         }
         Spacer(Modifier.size(8.dp))
@@ -164,9 +171,40 @@ private fun MetricChartCard(
 }
 
 @Composable
-private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, gaps: List<Int>, modifier: Modifier) {
+private fun ChartCanvas(
+    points: List<Float>,
+    yMin: Float,
+    yMax: Float,
+    gaps: List<Int>,
+    format: (Float) -> String,
+    intervalSec: Int,
+    naLabel: String,
+    modifier: Modifier,
+) {
     val pal = LocalPalette.current
-    Canvas(modifier) {
+    val measurer = rememberTextMeasurer()
+    val bubbleStyle = MaterialTheme.typography.labelSmall.mono()
+        .copy(color = MaterialTheme.colorScheme.onSurface)
+    val axisStyle = MaterialTheme.typography.labelSmall
+
+    // Horizontal drag scrubs the series; vertical drags fall through to the page's scroll. The x of
+    // the touch (null when not scrubbing) is resolved to the nearest sample at draw time, so it stays
+    // valid as new points stream in mid-scrub.
+    var touchX by remember { mutableStateOf<Float?>(null) }
+
+    Canvas(
+        modifier.pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragStart = { touchX = it.x.coerceIn(0f, size.width.toFloat()) },
+                onDragEnd = { touchX = null },
+                onDragCancel = { touchX = null },
+                onHorizontalDrag = { change, _ ->
+                    touchX = change.position.x.coerceIn(0f, size.width.toFloat())
+                    change.consume()
+                },
+            )
+        }
+    ) {
         val w = size.width
         val h = size.height
         // Recessive horizontal gridlines.
@@ -237,7 +275,62 @@ private fun ChartCanvas(points: List<Float>, yMin: Float, yMax: Float, gaps: Lis
                 color = StatusWarm,
             )
         }
+
+        // Scrub readout: crosshair at the nearest sample plus a value·age bubble.
+        val tx = touchX
+        if (tx != null && n > 1) {
+            val target = (tx / w * (n - 1)).roundToInt().coerceIn(0, n - 1)
+            // Snap to the closest real reading so scrubbing over a charging break / resume gap still
+            // lands on a value rather than a hole.
+            val i = (0 until n).filter { !points[it].isNaN() }.minByOrNull { kotlin.math.abs(it - target) }
+            if (i != null) {
+                val x = px(i)
+                val v = points[i]
+                drawLine(pal.accent.copy(alpha = 0.55f), Offset(x, 0f), Offset(x, h), 1.dp.toPx())
+                drawCircle(pal.accent, radius = 3.5.dp.toPx(), center = Offset(x, py(v)))
+
+                val ageSteps = (n - 1) - i
+                val ageSec = ageSteps * intervalSec
+                val age = when {
+                    ageSteps == 0 -> "now"
+                    ageSec < 60 -> "−${ageSec}s"
+                    else -> "−${ageSec / 60}m"
+                }
+                val label = "${format(v)} · $age"
+                val tl = measurer.measure(label, bubbleStyle)
+                val padX = 6.dp.toPx()
+                val padY = 3.dp.toPx()
+                val bw = tl.size.width + padX * 2
+                val bh = tl.size.height + padY * 2
+                // The top-left axis chip (yMax) is a Compose overlay drawn above this canvas, so keep
+                // the bubble clear of it — start no further left than just past that chip's width.
+                val leftChipW = measurer.measure(format(yMax), axisStyle).size.width + 8.dp.toPx()
+                val minBx = leftChipW + 4.dp.toPx()
+                val bx = (x - bw / 2f).coerceIn(minBx, (w - bw - 2.dp.toPx()).coerceAtLeast(minBx))
+                val by = 2.dp.toPx()
+                val radius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                drawRoundRect(Panel.copy(alpha = 0.94f), Offset(bx, by), Size(bw, bh), radius)
+                drawRoundRect(
+                    pal.accent.copy(alpha = 0.45f), Offset(bx, by), Size(bw, bh), radius,
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+                drawText(tl, topLeft = Offset(bx + padX, by + padY))
+            }
+        }
     }
+}
+
+/** An axis value on a subtle panel chip, kept legible over whatever the canvas draws behind it. */
+@Composable
+private fun AxisLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .background(Panel.copy(alpha = 0.78f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+    )
 }
 
 private fun sessionSpan(count: Int, intervalSec: Int): String {
