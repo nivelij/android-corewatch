@@ -39,9 +39,10 @@ class MonitoringService : Service() {
         }
         // dataSync type works API 29-35 (specialUse would need API 34; minSdk here is 31).
         startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        // NOT_STICKY: if the process is killed while recording, the session ends (it's recovered and
-        // archived on next launch) rather than the service silently restarting a phantom recording.
-        return START_NOT_STICKY
+        // STICKY so an OS memory kill (common while a game is foregrounded) respawns the service; on
+        // respawn ensureInitialized() sees the persisted recording flag and resumes the same session.
+        // An explicit Stop clears that flag and stopSelf()s, so a deliberate stop stays stopped.
+        return START_STICKY
     }
 
     /** Full, deliberate shutdown: stop collection, clear the task from Recents, drop everything. */

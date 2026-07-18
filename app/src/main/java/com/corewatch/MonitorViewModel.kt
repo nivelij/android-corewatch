@@ -17,6 +17,11 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         SessionCollector.ensureInitialized(app)
+        // If the app was reopened while a recording is still in progress (resumed after an OS kill),
+        // make sure the foreground service is up so it keeps running once we background again.
+        if (SessionCollector.isRecording) {
+            ContextCompat.startForegroundService(app, Intent(app, MonitoringService::class.java))
+        }
     }
 
     val deviceInfo: DeviceInfo get() = SessionCollector.deviceInfo

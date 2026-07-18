@@ -33,6 +33,8 @@ private const val HISTORY_BASE_INTERVAL_SEC = 5
 private const val HISTORY_MAX_POINTS = 720   // ~1h @5s before the timeline is compressed
 private const val MIN_ARCHIVE_SEC = 30       // recording is explicit now; only drop a fat-fingered start→stop
 private const val MAX_HISTORY_SESSIONS = 200 // keep the newest N completed sessions on disk
+private const val PREFS = "corewatch"
+private const val KEY_RECORDING = "recording_active" // survives an OS kill so recording resumes, not ends
 
 /**
  * Process-scoped telemetry collector. Lives beyond any single Activity so a foreground service can
@@ -112,10 +114,11 @@ object SessionCollector {
     private var recorderJob: Job? = null
 
     /**
-     * Initialise the reader + device facts for the live tiles, and recover any recording orphaned by
-     * an app kill (archived, not resumed). Idempotent; does NOT begin recording — so opening the app
-     * shows live data without capturing a session. `@Synchronized` because the service and the
-     * ViewModel can both call it on a fresh process.
+     * Initialise the reader + device facts for the live tiles. If a recording was in progress when
+     * the process died (the persisted [KEY_RECORDING] flag is set), resume it — so an OS kill during
+     * a game continues the same session (with a gap seam) instead of ending it. Otherwise archive any
+     * stray orphaned snapshot. Idempotent; `@Synchronized` because the service (on a START_STICKY
+     * respawn) and the ViewModel can both reach here on a fresh process.
      */
     @Synchronized
     fun ensureInitialized(context: Context) {
@@ -123,21 +126,59 @@ object SessionCollector {
         appContext = context.applicationContext
         reader = MetricsReader(appContext)
         deviceInfo = DeviceInfo.read(appContext, reader)
-        recoverOrphanedRecording()
+        if (recordingFlag()) resumeRecording() else recoverOrphanedRecording()
     }
 
     /**
      * Begin an explicit recording: accumulate the history series + battery aggregates, persisting a
-     * snapshot each tick so an app kill loses at most one interval. Idempotent. The caller owns the
+     * snapshot each tick so a kill loses at most one interval. Idempotent. The caller owns the
      * foreground service / notification that keeps this alive in the background.
      */
     @Synchronized
     fun startRecording(context: Context) {
         ensureInitialized(context)
         if (recorderJob?.isActive == true) return
-        isRecording = true
         sessionStartMillis = System.currentTimeMillis()
         lastTickMillis = sessionStartMillis
+        isRecording = true
+        setRecordingFlag(true)
+        beginRecorderLoop()
+    }
+
+    /**
+     * Continue a recording that was interrupted by a process/OS kill: reload the persisted series and
+     * pick up recording where it left off, with a gap seam marking the interruption. Falls back to a
+     * fresh recording if the flag is set but no snapshot survived.
+     */
+    private fun resumeRecording() {
+        val snap = SessionStore.load(appContext)
+        if (snap != null && snap.cpu.isNotEmpty()) {
+            historyIntervalSec = snap.historyIntervalSec.coerceAtLeast(HISTORY_BASE_INTERVAL_SEC)
+            sessionStartMillis = snap.startEpochMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
+            lastTickMillis = snap.lastTickEpochMillis.takeIf { it > 0L } ?: sessionStartMillis
+            ramTotalBytes = snap.ramTotalBytes
+            gapIndices.addAll(snap.gaps)
+            cpuHistory.addAll(snap.cpu)
+            ramHistory.addAll(snap.ram)
+            tempHistory.addAll(snap.temp)
+            powerHistory.addAll(snap.power)
+            batteryTempMinC = snap.battMinTempC
+            batteryTempMaxC = snap.battMaxTempC
+            batteryEnergyMwh = snap.battEnergyMwh
+            batteryDischargeSec = snap.battElapsedSec
+            // A break between the last recorded point and where recording resumes now.
+            val boundary = cpuHistory.size
+            if (boundary > 0) gapIndices.add(boundary)
+        } else {
+            sessionStartMillis = System.currentTimeMillis()
+            lastTickMillis = sessionStartMillis
+        }
+        isRecording = true
+        beginRecorderLoop()
+    }
+
+    private fun beginRecorderLoop() {
+        if (recorderJob?.isActive == true) return
         recorderJob = scope.launch {
             while (isActive) {
                 val sample = withContext(Dispatchers.IO) { reader.sample() }
@@ -176,6 +217,15 @@ object SessionCollector {
         }
     }
 
+    private fun recordingFlag(): Boolean =
+        ::appContext.isInitialized &&
+            appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_RECORDING, false)
+
+    private fun setRecordingFlag(active: Boolean) {
+        if (!::appContext.isInitialized) return
+        appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_RECORDING, active).apply()
+    }
+
     /**
      * Stop the active recording and clear it (on disk too). Called on an explicit stop — the in-app
      * Stop control, the notification's Stop, a swipe-away, or app exit. A run that lasted long enough
@@ -188,6 +238,7 @@ object SessionCollector {
         recorderJob = null
         archiveIfWorthKeeping()
         isRecording = false
+        setRecordingFlag(false)
         cpuHistory.clear()
         ramHistory.clear()
         tempHistory.clear()
