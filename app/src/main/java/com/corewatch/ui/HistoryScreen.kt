@@ -191,6 +191,7 @@ fun HistoryDetailScreen(
         Spacer(Modifier.height(14.dp))
         HistoryCharts(
             cpuPoints = s.snapshot.cpu,
+            cpuIsLoad = viewModel.cpuLoadSupported,
             cpuMaxMhz = s.cpuMaxMhz,
             ramPoints = s.snapshot.ram,
             ramTotalBytes = s.snapshot.ramTotalBytes,

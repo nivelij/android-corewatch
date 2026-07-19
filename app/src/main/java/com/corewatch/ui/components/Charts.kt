@@ -45,6 +45,7 @@ import com.corewatch.ui.theme.PanelBorder
 import com.corewatch.ui.theme.StatusWarm
 import com.corewatch.ui.theme.mono
 
+private fun percent(v: Float): String = "${v.roundToInt()}%"
 private fun mhzToGhz(mhz: Float): String = String.format("%.2f GHz", mhz / 1000f)
 private fun bytesToGb(bytes: Float): String = String.format("%.1f GB", bytes / 1_073_741_824f)
 private fun degC(t: Float): String = String.format("%.1f °C", t)
@@ -54,6 +55,9 @@ private fun watts(w: Float): String = String.format("%.2f W", w) // draw, ≥0 (
 @Composable
 fun HistoryCharts(
     cpuPoints: List<Float>,
+    // CPU series holds load % when true (axis 0–100 %), else peak clock in MHz (axis 0–cpuMaxMhz,
+    // shown in GHz). Decided by whether the OS exposes /proc/stat to the app on this device.
+    cpuIsLoad: Boolean,
     cpuMaxMhz: Int?,
     ramPoints: List<Float>,
     ramTotalBytes: Long,
@@ -66,9 +70,14 @@ fun HistoryCharts(
     // never captured a metric simply has none ("no data").
     emptyLabel: String = "collecting data…",
 ) {
-    val cpuTop = cpuMaxMhz?.toFloat()
-        ?: cpuPoints.filter { !it.isNaN() }.maxOrNull()?.times(1.1f)
-        ?: 1f
+    val cpuCard: @Composable (Modifier) -> Unit = if (cpuIsLoad) {
+        { m -> MetricChartCard("CPU load", cpuPoints, 0f, 100f, gaps, intervalSec, ::percent, m, emptyLabel = emptyLabel) }
+    } else {
+        val cpuTop = cpuMaxMhz?.toFloat()
+            ?: cpuPoints.filter { !it.isNaN() }.maxOrNull()?.times(1.1f)
+            ?: 1f
+        { m -> MetricChartCard("CPU clock", cpuPoints, 0f, cpuTop, gaps, intervalSec, ::mhzToGhz, m, emptyLabel = emptyLabel) }
+    }
     val ramTop = if (ramTotalBytes > 0) ramTotalBytes.toFloat()
     else ramPoints.maxOrNull()?.times(1.1f) ?: 1f
 
@@ -87,7 +96,7 @@ fun HistoryCharts(
 
     // Wired once, placed into a 2×2 grid on wide screens (landscape) or a single column otherwise.
     val cards = listOf<@Composable (Modifier) -> Unit>(
-        { m -> MetricChartCard("CPU history", cpuPoints, 0f, cpuTop, gaps, intervalSec, ::mhzToGhz, m, emptyLabel = emptyLabel) },
+        cpuCard,
         { m -> MetricChartCard("Memory history", ramPoints, 0f, ramTop, gaps, intervalSec, ::bytesToGb, m, emptyLabel = emptyLabel) },
         { m -> MetricChartCard("Battery temperature", tempPoints, tempLo, tempHi, gaps, intervalSec, ::degC, m, emptyLabel = emptyLabel) },
         { m -> MetricChartCard("Power draw", powerPoints, powerLo, powerHi, gaps, intervalSec, ::watts, m, naLabel = "n/a", emptyLabel = emptyLabel) },

@@ -19,7 +19,10 @@ internal object HistoryStore {
 
     private const val DIR = "history"
     private const val EXT = ".cws"
-    private const val VERSION = 1
+    // v2: the CPU series now stores overall load % (0..100) instead of peak clock (MHz). Bumping the
+    // version cleanly drops v1 clock-based archives (readInt() mismatch → skipped) so they never get
+    // misrendered on the new percentage axis.
+    private const val VERSION = 2
     private const val MAX_SERIES_POINTS = 100_000 // sanity bound when reading a possibly-corrupt file
 
     private fun dir(context: Context) = File(context.filesDir, DIR).apply { mkdirs() }

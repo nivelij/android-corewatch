@@ -96,11 +96,13 @@ fun CoreWatchScreen(
     val context = LocalContext.current
     var lastBackAt by remember { mutableStateOf(0L) }
 
-    // Rolling window of recent CPU peak frequencies, feeding the sparkline.
+    // Rolling window feeding the sparkline under the CPU headline: overall load (%) where the OS
+    // exposes it, else peak clock (MHz) so the sparkline still renders on devices that block it.
     val history = remember { mutableStateListOf<Float>() }
     LaunchedEffect(metrics) {
-        metrics.cpu.currentMaxMhz?.let { mhz ->
-            history.add(mhz.toFloat())
+        val v = metrics.cpu.overallLoad?.let { it * 100f } ?: metrics.cpu.currentMaxMhz?.toFloat()
+        v?.let {
+            history.add(it)
             if (history.size > HISTORY_SIZE) history.removeAt(0)
         }
     }
@@ -169,6 +171,7 @@ fun CoreWatchScreen(
                     if (recording) {
                         HistoryCharts(
                             cpuPoints = viewModel.cpuHistory,
+                            cpuIsLoad = viewModel.cpuLoadSupported,
                             cpuMaxMhz = info.maxClockMhz,
                             ramPoints = viewModel.ramHistory,
                             ramTotalBytes = viewModel.ramTotalBytes,

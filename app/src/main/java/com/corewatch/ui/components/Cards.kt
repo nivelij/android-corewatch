@@ -231,7 +231,19 @@ fun SystemSpecsDialog(info: DeviceInfo, onDismiss: () -> Unit) {
 @Composable
 fun CpuCard(cpu: CpuClock, history: List<Float>, modifier: Modifier = Modifier) {
     Panel(label = "CPU", modifier = modifier, trailing = { LiveBadge(cpu.live) }) {
+        val load = cpu.overallLoad
         when {
+            // Headline is overall utilization %, which moves with real activity regardless of any
+            // clock cap; the clock is kept as context underneath.
+            load != null -> {
+                MetricValue(value = "${(load * 100).roundToInt()}", unit = "%", gradient = true)
+                Spacer(Modifier.height(2.dp))
+                Caption(clockCaption(cpu))
+                Spacer(Modifier.height(14.dp))
+                Sparkline(history, Modifier.fillMaxWidth().height(56.dp))
+            }
+
+            // Load not available yet (first sample) or /proc/stat blocked — fall back to peak clock.
             cpu.live && cpu.currentMaxMhz != null -> {
                 MetricValue(value = mhzToGhz(cpu.currentMaxMhz), unit = "GHz", gradient = true)
                 Spacer(Modifier.height(2.dp))
@@ -250,11 +262,22 @@ fun CpuCard(cpu: CpuClock, history: List<Float>, modifier: Modifier = Modifier) 
             }
 
             else -> {
-                MetricValue(value = "—", unit = "GHz")
+                MetricValue(value = "—", unit = "%")
                 Spacer(Modifier.height(2.dp))
-                Caption("live clock not exposed by kernel")
+                Caption("live load not exposed by kernel")
             }
         }
+    }
+}
+
+/** Clock context shown under the CPU load headline, e.g. "avg 1.50 · peak 1.84 GHz". */
+private fun clockCaption(cpu: CpuClock): String {
+    val avg = cpu.avgMhz
+    val peak = cpu.currentMaxMhz
+    return when {
+        avg != null && peak != null -> "avg ${mhzToGhz(avg)} · peak ${mhzToGhz(peak)} GHz"
+        peak != null -> "peak ${mhzToGhz(peak)} GHz"
+        else -> "${cpu.cores} cores"
     }
 }
 
@@ -318,16 +341,16 @@ private fun CoreTile(core: Int, mhz: Int?, load: Float?, tint: Float, modifier: 
             maxLines = 1,
         )
         Spacer(Modifier.height(4.dp))
-        // Clock is the hero when available; otherwise the load % takes its place. Unit is stacked
-        // so 4-digit clocks (e.g. "3187") never clip.
+        // Load % is the hero (it moves even when a core's clock is pinned at a capped ceiling); the
+        // clock falls back only when load is unavailable. Unit is stacked so it never clips.
         Text(
-            text = mhz?.toString() ?: load?.let { "${(it * 100).roundToInt()}" } ?: "—",
+            text = load?.let { "${(it * 100).roundToInt()}" } ?: mhz?.toString() ?: "—",
             style = MaterialTheme.typography.titleMedium.mono().copy(fontWeight = FontWeight.SemiBold),
             color = TextPrimary,
             maxLines = 1,
         )
         Text(
-            text = if (mhz != null) "MHz" else "%",
+            text = if (load != null) "%" else "MHz",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -338,7 +361,7 @@ private fun CoreTile(core: Int, mhz: Int?, load: Float?, tint: Float, modifier: 
             if (mhz != null) {
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = "${(load * 100).roundToInt()}%",
+                    text = "$mhz MHz",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

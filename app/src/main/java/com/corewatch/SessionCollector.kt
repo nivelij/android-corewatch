@@ -93,6 +93,10 @@ object SessionCollector {
     /** Start of the active recording, for the UI's elapsed timer; 0 when idle. */
     val recordingStartMillis: Long get() = if (isRecording) sessionStartMillis else 0L
 
+    /** False when the OS blocks /proc/stat for the app: no CPU load available, so the CPU series and
+     *  charts use clock (MHz/GHz) instead of load (%). Constant per device. */
+    val cpuLoadSupported: Boolean get() = ::reader.isInitialized && reader.cpuLoadSupported
+
     // ---- Whole-session battery aggregates (since collection started). ----
     private var batteryTempMinC by mutableStateOf<Float?>(null)
     private var batteryTempMaxC by mutableStateOf<Float?>(null)
@@ -184,7 +188,13 @@ object SessionCollector {
                 val sample = withContext(Dispatchers.IO) { reader.sample() }
                 lastTickMillis = System.currentTimeMillis()
                 ramTotalBytes = sample.ramTotalBytes
-                cpuHistory.add(sample.cpu.currentMaxMhz?.toFloat() ?: Float.NaN)
+                // CPU series holds load % where the OS exposes /proc/stat (a meaningful, always-moving
+                // trace, unlike a capped/pinned clock); on devices that block it for apps, fall back to
+                // peak clock (MHz) so the chart still renders. cpuLoadSupported picks the axis/format.
+                cpuHistory.add(
+                    if (reader.cpuLoadSupported) sample.cpu.overallLoad?.let { it * 100f } ?: Float.NaN
+                    else sample.cpu.currentMaxMhz?.toFloat() ?: Float.NaN,
+                )
                 ramHistory.add(sample.ramUsedBytes.toFloat())
                 tempHistory.add(sample.battery.tempC ?: Float.NaN)
                 // Power *draw* only exists on battery; while charging it's N/A (NaN → chart break).

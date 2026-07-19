@@ -33,6 +33,8 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     val gapIndices: List<Int> get() = SessionCollector.gapIndices
     val ramTotalBytes: Long get() = SessionCollector.ramTotalBytes
     val historyIntervalSec: Int get() = SessionCollector.historyIntervalSec
+    /** False when the OS blocks /proc/stat: CPU charts show clock (GHz) instead of load (%). */
+    val cpuLoadSupported: Boolean get() = SessionCollector.cpuLoadSupported
     val batterySession: BatterySession get() = SessionCollector.batterySession
 
     // ---- Recording control. ----

@@ -27,6 +27,19 @@ data class CpuClock(
     val maxMhz: Int?,
     val cores: Int,
 ) {
+    /** Overall CPU utilization 0..1 — the mean of the readable per-core busy fractions. This is the
+     *  headline "CPU usage": it tracks real activity even when the big clusters are frequency-capped
+     *  (so their clock sits pinned). `null` until the first /proc/stat delta lands, or if unreadable. */
+    val overallLoad: Float?
+        get() {
+            val valid = perCoreLoad.filter { !it.isNaN() }
+            return if (valid.isEmpty()) null else valid.sum() / valid.size
+        }
+
+    /** Mean current core clock in MHz (context caption); `null` when no live clocks were readable. */
+    val avgMhz: Int?
+        get() = perCoreMhz.takeIf { it.isNotEmpty() }?.let { it.sum() / it.size }
+
     companion object {
         val EMPTY = CpuClock(false, null, emptyList(), emptyList(), null, null, 0)
     }
@@ -120,6 +133,18 @@ class MetricsReader(context: Context) {
     // query it at most every HEADROOM_QUERY_INTERVAL_MS and reuse the last good value in between.
     private var lastHeadroom: Float? = null
     private var lastHeadroomAtMs: Long = 0L
+
+    /** Whether this device lets the app read per-core busy from /proc/stat. Some OEM/Android builds
+     *  (e.g. Android 16 on certain MediaTek/ColorOS devices) block it for untrusted apps via SELinux
+     *  even though `adb shell` can read it — leaving cpufreq clocks as the only CPU signal. Probed
+     *  once; when false the CPU charts fall back to clock instead of load. */
+    val cpuLoadSupported: Boolean by lazy {
+        try {
+            File("/proc/stat").useLines { lines -> lines.any { it.startsWith("cpu0") } }
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     /** Number of logical CPUs, discovered from sysfs with a Runtime fallback. */
     val coreCount: Int = run {
