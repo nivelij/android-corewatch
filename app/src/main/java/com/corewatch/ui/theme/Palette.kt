@@ -19,7 +19,7 @@ data class CorePalette(
     val bgBottom: Color,
 )
 
-enum class ThemeId { EMBER, INDIGO, CRIMSON, TEAL }
+enum class ThemeId { EMBER, VOLT, AZURE, INDIGO, AMETHYST, STEEL }
 
 /** The original gold/amber identity — reuses the constants in [Color.kt]. */
 val EmberPalette = CorePalette(
@@ -32,7 +32,7 @@ val EmberPalette = CorePalette(
     bgBottom = OledBlack,
 )
 
-/** Cool blue → violet on deep navy. */
+/** Cool periwinkle blue → violet on black. */
 val IndigoPalette = CorePalette(
     id = ThemeId.INDIGO,
     displayName = "Indigo",
@@ -43,30 +43,55 @@ val IndigoPalette = CorePalette(
     bgBottom = OledBlack,
 )
 
-/** Hot red → coral on near-black. */
-val CrimsonPalette = CorePalette(
-    id = ThemeId.CRIMSON,
-    displayName = "Crimson",
-    accent = Color(0xFFFF6274),
-    accentDeep = Color(0xFFC21E2E),
-    accentRamp = listOf(Color(0xFFB31226), Color(0xFFFF3B4E), Color(0xFFFF8A6B)),
+/** Electric sky blue → pale azure on black; a bright, true blue (no violet, no green). */
+val AzurePalette = CorePalette(
+    id = ThemeId.AZURE,
+    displayName = "Azure",
+    accent = Color(0xFF3B9EFF),
+    accentDeep = Color(0xFF1D6FD6),
+    accentRamp = listOf(Color(0xFF1668CC), Color(0xFF3B9EFF), Color(0xFFA8D6FF)),
     bgTop = OledBlack,
     bgBottom = OledBlack,
 )
 
-/** Aqua → teal on deep green-black. */
-val TealPalette = CorePalette(
-    id = ThemeId.TEAL,
-    displayName = "Teal",
-    accent = Color(0xFF3FE0C8),
-    accentDeep = Color(0xFF2AA9C0),
-    accentRamp = listOf(Color(0xFF15C2A0), Color(0xFF33D6C4), Color(0xFF7CECE2)),
+/** Electric lime → pale green on black; a terminal / high-voltage look. */
+val VoltPalette = CorePalette(
+    id = ThemeId.VOLT,
+    displayName = "Volt",
+    accent = Color(0xFFB5F23D),
+    accentDeep = Color(0xFF5C9A16),
+    accentRamp = listOf(Color(0xFF3E8E10), Color(0xFF8FD62A), Color(0xFFD6F98A)),
     bgTop = OledBlack,
     bgBottom = OledBlack,
 )
 
-/** All selectable themes, in display order. */
-val ThemeCatalog = listOf(EmberPalette, IndigoPalette, CrimsonPalette, TealPalette)
+/** Saturated violet → lilac on black; purple where Indigo leans blue. */
+val AmethystPalette = CorePalette(
+    id = ThemeId.AMETHYST,
+    displayName = "Amethyst",
+    accent = Color(0xFFC084FC),
+    accentDeep = Color(0xFF7C3AED),
+    accentRamp = listOf(Color(0xFF6D28D9), Color(0xFFA855F7), Color(0xFFD8B4FE)),
+    bgTop = OledBlack,
+    bgBottom = OledBlack,
+)
+
+/** Neutral graphite → silver; a monochrome "no-color" instrument look. */
+val SteelPalette = CorePalette(
+    id = ThemeId.STEEL,
+    displayName = "Steel",
+    accent = Color(0xFFC7D0DC),
+    accentDeep = Color(0xFF7B8794),
+    accentRamp = listOf(Color(0xFF5B6673), Color(0xFF99A6B5), Color(0xFFE2E8F0)),
+    bgTop = OledBlack,
+    bgBottom = OledBlack,
+)
+
+/** All selectable themes, in display order (warm → cool → neutral). */
+val ThemeCatalog = listOf(
+    EmberPalette, VoltPalette, AzurePalette,
+    IndigoPalette, AmethystPalette, SteelPalette,
+)
 
 fun paletteFor(id: ThemeId): CorePalette = ThemeCatalog.firstOrNull { it.id == id } ?: EmberPalette
 

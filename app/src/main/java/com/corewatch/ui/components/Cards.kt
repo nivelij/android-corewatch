@@ -8,6 +8,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -754,7 +755,7 @@ fun AccentPicker(selected: ThemeId, onSelect: (ThemeId) -> Unit, modifier: Modif
                 .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            HexSwatch(current.accentRamp, current.accent, size = 20.dp, selected = false, filled = true)
+            HexSwatch(current.accentRamp, size = 20.dp, bright = true)
             Spacer(Modifier.width(3.dp))
             Text(
                 text = "▾",
@@ -766,17 +767,23 @@ fun AccentPicker(selected: ThemeId, onSelect: (ThemeId) -> Unit, modifier: Modif
             Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
                 SectionLabel("Accent")
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                // Every accent in a single row (scrolls horizontally if it ever exceeds the width),
+                // so there's no wrapping and every swatch stays uniform.
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     ThemeCatalog.forEach { p ->
                         val isSel = p.id == selected
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSel) p.accent.copy(alpha = 0.14f) else Color.Transparent)
                                 .clickable { onSelect(p.id); open = false }
-                                .padding(4.dp),
+                                .padding(vertical = 6.dp, horizontal = 6.dp),
                         ) {
-                            HexSwatch(p.accentRamp, p.accent, size = 34.dp, selected = isSel, filled = isSel)
+                            HexSwatch(p.accentRamp, size = 32.dp, bright = isSel)
                             Spacer(Modifier.height(6.dp))
                             Text(
                                 text = p.displayName,
@@ -793,37 +800,24 @@ fun AccentPicker(selected: ThemeId, onSelect: (ThemeId) -> Unit, modifier: Modif
     }
 }
 
-/** A hexagon accent chip: filled with the accent gradient, or a hollow accent outline. */
+/**
+ * A hexagon accent chip. Every swatch is the exact same solid gradient hexagon — no strokes that
+ * would change its footprint — so all render at an identical size; [bright] only controls full vs
+ * dimmed fill. Selection is shown by the cell's background chip, not by enlarging the hexagon.
+ */
 @Composable
 private fun HexSwatch(
     ramp: List<Color>,
-    accent: Color,
     size: Dp,
-    selected: Boolean,
-    filled: Boolean,
+    bright: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Canvas(modifier.size(size)) {
         val cx = this.size.width / 2f
         val cy = this.size.height / 2f
-        val r = this.size.minDimension * 0.46f
+        val r = this.size.minDimension * 0.44f
         val hex = hexPath(cx, cy, r)
-        if (filled) {
-            drawPath(hex, brush = Brush.linearGradient(ramp))
-        } else {
-            drawPath(
-                hex,
-                color = accent.copy(alpha = 0.55f),
-                style = Stroke(width = this.size.minDimension * 0.09f, join = StrokeJoin.Round),
-            )
-        }
-        if (selected) {
-            drawPath(
-                hex,
-                color = accent,
-                style = Stroke(width = this.size.minDimension * 0.10f, join = StrokeJoin.Round),
-            )
-        }
+        drawPath(hex, brush = Brush.linearGradient(ramp), alpha = if (bright) 1f else 0.42f)
     }
 }
 
