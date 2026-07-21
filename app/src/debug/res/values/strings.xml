@@ -1,0 +1,6 @@
+<resources>
+    <!-- Debug (com.corewatch.test) overrides so the side-by-side test build is distinguishable from
+         the production install on the launcher and in its notification. -->
+    <string name="app_name">CoreWatch Test</string>
+    <string name="notif_title">CoreWatch Test · monitoring</string>
+</resources>

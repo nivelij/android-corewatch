@@ -72,6 +72,12 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+        debug {
+            // Install side-by-side as a SEPARATE app (com.corewatch.test) with its own data sandbox,
+            // so a test build never overwrites — or wipes the data of — the production install.
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-test"
+        }
     }
 
     compileOptions {
