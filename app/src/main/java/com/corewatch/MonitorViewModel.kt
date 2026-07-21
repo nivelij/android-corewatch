@@ -2,11 +2,18 @@ package com.corewatch
 
 import android.app.Application
 import android.content.Intent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.corewatch.monitor.DeviceInfo
+import com.corewatch.monitor.DiskBenchmark
+import com.corewatch.monitor.DiskBenchmarkState
 import com.corewatch.monitor.LiveMetrics
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Thin adapter over [SessionCollector]. The collector is process-scoped; opening the app initialises
@@ -40,6 +47,26 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     /** False when the OS blocks /proc/diskstats: the Storage card shows capacity only, no throughput. */
     val diskIoSupported: Boolean get() = SessionCollector.diskIoSupported
     val batterySession: BatterySession get() = SessionCollector.batterySession
+
+    // ---- On-demand disk speed test. ----
+    /** State of the storage speed test (observable — reading it recomposes the Storage card). */
+    var diskBenchmarkState: DiskBenchmarkState by mutableStateOf(DiskBenchmarkState.Idle)
+        private set
+
+    /** Run the write/read benchmark on every mounted volume, off the main thread. Ignored if already
+     *  running. Works regardless of [diskIoSupported] — this is the fallback that shows a real speed
+     *  number where the passive counters are SELinux-blocked. */
+    fun runDiskBenchmark() {
+        if (diskBenchmarkState is DiskBenchmarkState.Running) return
+        diskBenchmarkState = DiskBenchmarkState.Running
+        viewModelScope.launch {
+            diskBenchmarkState = try {
+                DiskBenchmarkState.Done(DiskBenchmark.run(getApplication()))
+            } catch (e: Exception) {
+                DiskBenchmarkState.Failed(e.message ?: "Speed test failed")
+            }
+        }
+    }
 
     // ---- Recording control. ----
     /** True while a session is being recorded (observable — reading it recomposes the UI). */

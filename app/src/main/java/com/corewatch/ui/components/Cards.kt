@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -59,6 +60,7 @@ import com.corewatch.monitor.BatteryInfo
 import com.corewatch.monitor.ChargeStatus
 import com.corewatch.monitor.CpuClock
 import com.corewatch.monitor.DeviceInfo
+import com.corewatch.monitor.DiskBenchmarkState
 import com.corewatch.monitor.DiskInfo
 import com.corewatch.monitor.LiveMetrics
 import com.corewatch.monitor.Plug
@@ -416,7 +418,12 @@ fun RamCard(metrics: LiveMetrics, modifier: Modifier = Modifier) {
  * the same degrade as [CpuCard] falling back from load to clock.
  */
 @Composable
-fun StorageCard(disk: DiskInfo, modifier: Modifier = Modifier) {
+fun StorageCard(
+    disk: DiskInfo,
+    benchmarkState: DiskBenchmarkState,
+    onRunBenchmark: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val accent = LocalPalette.current.accent
     Panel(label = "Storage", modifier = modifier) {
         if (disk.volumes.isEmpty()) {
@@ -465,6 +472,87 @@ fun StorageCard(disk: DiskInfo, modifier: Modifier = Modifier) {
                 }
             }
         }
+
+        // On-demand speed test — always available (the only way to get a real read/write number on
+        // devices where the passive counters are SELinux-blocked).
+        if (disk.volumes.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            HairlineDivider()
+            Spacer(Modifier.height(12.dp))
+            SpeedTest(benchmarkState, onRunBenchmark, accent)
+        }
+    }
+}
+
+/** The "Test speed" control + its per-volume results, benchmarked on demand. */
+@Composable
+private fun SpeedTest(state: DiskBenchmarkState, onRun: () -> Unit, accent: Color) {
+    val running = state is DiskBenchmarkState.Running
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        SectionLabel("Speed test")
+        Spacer(Modifier.weight(1f))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, accent.copy(alpha = if (running) 0.3f else 1f), RoundedCornerShape(12.dp))
+                .then(if (running) Modifier else Modifier.clickable(onClick = onRun))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (running) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        color = accent,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Testing…", style = MaterialTheme.typography.labelLarge, color = accent)
+                }
+            } else {
+                Text(
+                    text = when (state) {
+                        is DiskBenchmarkState.Done, is DiskBenchmarkState.Failed -> "Test again"
+                        else -> "Test read/write"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = accent,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+
+    when (state) {
+        is DiskBenchmarkState.Done -> {
+            if (state.results.isEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Caption("no volume had enough free space to test")
+            } else {
+                state.results.forEach { r ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = r.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "W ${mbps(r.writeBytesPerSec)}  ·  R ${mbps(r.readBytesPerSec)}",
+                        style = MaterialTheme.typography.titleMedium.mono(),
+                        color = accent,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Caption("write is measured to the device; read may be cache-assisted")
+            }
+        }
+        is DiskBenchmarkState.Failed -> {
+            Spacer(Modifier.height(10.dp))
+            Caption(state.message)
+        }
+        else -> Unit
     }
 }
 

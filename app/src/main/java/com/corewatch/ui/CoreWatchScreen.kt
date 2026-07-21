@@ -198,11 +198,22 @@ fun CoreWatchScreen(
                     )
                 }
 
+                // Storage tile: per-volume capacity + (where readable) live throughput, plus the
+                // on-demand speed test that works even where the passive counters are blocked.
+                val storageBlock: @Composable () -> Unit = {
+                    StorageCard(
+                        disk = metrics.disk,
+                        benchmarkState = viewModel.diskBenchmarkState,
+                        onRunBenchmark = { viewModel.runDiskBenchmark() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
                 val openHistory = { nav = Nav.History }
                 if (wide) {
-                    LandscapeLayout(outer, info, metrics, session, history, sessionBlock, recordingControl, guard, selectedTheme, onThemeChange, openHistory, recording)
+                    LandscapeLayout(outer, info, metrics, session, history, sessionBlock, recordingControl, storageBlock, guard, selectedTheme, onThemeChange, openHistory, recording)
                 } else {
-                    PortraitLayout(outer, info, metrics, session, history, sessionBlock, recordingControl, guard, selectedTheme, onThemeChange, openHistory, recording)
+                    PortraitLayout(outer, info, metrics, session, history, sessionBlock, recordingControl, storageBlock, guard, selectedTheme, onThemeChange, openHistory, recording)
                 }
             }
         }
@@ -307,6 +318,7 @@ private fun PortraitLayout(
     history: List<Float>,
     charts: @Composable () -> Unit,
     recordingControl: @Composable () -> Unit,
+    storageBlock: @Composable () -> Unit,
     guard: @Composable () -> Unit,
     selectedTheme: ThemeId,
     onThemeChange: (ThemeId) -> Unit,
@@ -327,7 +339,7 @@ private fun PortraitLayout(
         }
         RamCard(metrics, Modifier.fillMaxWidth())
         PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth(), showSession = recording)
-        StorageCard(metrics.disk, Modifier.fillMaxWidth())
+        storageBlock()
         charts()
         SystemInfoPanel(info, Modifier.fillMaxWidth())
         Spacer(Modifier.height(20.dp))
@@ -343,6 +355,7 @@ private fun LandscapeLayout(
     history: List<Float>,
     charts: @Composable () -> Unit,
     recordingControl: @Composable () -> Unit,
+    storageBlock: @Composable () -> Unit,
     guard: @Composable () -> Unit,
     selectedTheme: ThemeId,
     onThemeChange: (ThemeId) -> Unit,
@@ -373,7 +386,7 @@ private fun LandscapeLayout(
                 CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
             }
             PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth(), showSession = recording)
-            StorageCard(metrics.disk, Modifier.fillMaxWidth())
+            storageBlock()
             charts()
             Spacer(Modifier.height(20.dp))
         }
