@@ -197,6 +197,11 @@ fun HistoryDetailScreen(
             ramTotalBytes = s.snapshot.ramTotalBytes,
             tempPoints = s.snapshot.temp,
             powerPoints = s.snapshot.power,
+            diskReadPoints = s.snapshot.diskRead,
+            diskWritePoints = s.snapshot.diskWrite,
+            // Derive from the archived data, not the live probe: show disk charts iff this session
+            // actually captured throughput (a session recorded on a device that blocked it is all-NaN).
+            showDiskIo = s.snapshot.diskRead.any { !it.isNaN() },
             gaps = s.snapshot.gaps,
             intervalSec = s.snapshot.historyIntervalSec,
             modifier = Modifier.fillMaxWidth(),

@@ -24,7 +24,9 @@ internal object SessionStore {
     // time — needed to file it into the daily History archive on the eventual explicit stop.
     // v6: added lastTickEpochMillis so a recording orphaned by an app kill can be recovered and
     // archived on next launch with an accurate end time.
-    private const val VERSION = 6
+    // v7: added the diskRead/diskWrite throughput series (device-wide B/s). Bumping drops pre-v7
+    // snapshots so an old killed session restores empty rather than mis-reading the new trailing series.
+    private const val VERSION = 7
     private const val MAX_SERIES_POINTS = 100_000 // sanity bound when reading a possibly-corrupt file
 
     private fun file(context: Context) = File(context.filesDir, FILE)
@@ -47,6 +49,8 @@ internal object SessionStore {
                 writeSeries(out, s.ram)   // used bytes per tick
                 writeSeries(out, s.temp)  // battery °C per tick
                 writeSeries(out, s.power) // battery draw W (≥0 on battery, NaN charging) per tick
+                writeSeries(out, s.diskRead)  // device-wide disk read B/s per tick (NaN when unsupported)
+                writeSeries(out, s.diskWrite) // device-wide disk write B/s per tick (NaN when unsupported)
                 out.writeInt(s.gaps.size) // indices where the process was killed then resumed
                 for (g in s.gaps) out.writeInt(g)
             }
@@ -78,8 +82,10 @@ internal object SessionStore {
                 val ram = readSeries(inp) ?: return null
                 val temp = readSeries(inp) ?: return null
                 val power = readSeries(inp) ?: return null
+                val diskRead = readSeries(inp) ?: return null
+                val diskWrite = readSeries(inp) ?: return null
                 val gaps = readInts(inp) ?: return null
-                SessionSnapshot(interval, ramTotal, cpu, ram, temp, power, min, max, energy, elapsed, gaps, startEpochMillis, lastTickEpochMillis)
+                SessionSnapshot(interval, ramTotal, cpu, ram, temp, power, min, max, energy, elapsed, gaps, startEpochMillis, lastTickEpochMillis, diskRead, diskWrite)
             }
         } catch (_: Exception) {
             null
@@ -131,4 +137,8 @@ data class SessionSnapshot(
     /** Wall-clock time of the most recent recorded tick; used as the end time when recovering an
      *  app-killed recording. 0 if unknown (legacy). */
     val lastTickEpochMillis: Long = 0L,
+    /** Device-wide disk read throughput (B/s) per tick; NaN where unsupported. Empty on legacy snapshots. */
+    val diskRead: List<Float> = emptyList(),
+    /** Device-wide disk write throughput (B/s) per tick; NaN where unsupported. Empty on legacy snapshots. */
+    val diskWrite: List<Float> = emptyList(),
 )

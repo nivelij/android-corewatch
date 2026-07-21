@@ -30,11 +30,15 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     val ramHistory: List<Float> get() = SessionCollector.ramHistory
     val tempHistory: List<Float> get() = SessionCollector.tempHistory
     val powerHistory: List<Float> get() = SessionCollector.powerHistory
+    val diskReadHistory: List<Float> get() = SessionCollector.diskReadHistory
+    val diskWriteHistory: List<Float> get() = SessionCollector.diskWriteHistory
     val gapIndices: List<Int> get() = SessionCollector.gapIndices
     val ramTotalBytes: Long get() = SessionCollector.ramTotalBytes
     val historyIntervalSec: Int get() = SessionCollector.historyIntervalSec
     /** False when the OS blocks /proc/stat: CPU charts show clock (GHz) instead of load (%). */
     val cpuLoadSupported: Boolean get() = SessionCollector.cpuLoadSupported
+    /** False when the OS blocks /proc/diskstats: the Storage card shows capacity only, no throughput. */
+    val diskIoSupported: Boolean get() = SessionCollector.diskIoSupported
     val batterySession: BatterySession get() = SessionCollector.batterySession
 
     // ---- Recording control. ----

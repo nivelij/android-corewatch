@@ -22,7 +22,9 @@ internal object HistoryStore {
     // v2: the CPU series now stores overall load % (0..100) instead of peak clock (MHz). Bumping the
     // version cleanly drops v1 clock-based archives (readInt() mismatch → skipped) so they never get
     // misrendered on the new percentage axis.
-    private const val VERSION = 2
+    // v3: added the diskRead/diskWrite throughput series to the body. Bumping drops v2 archives so an
+    // old file's shorter body isn't mis-read against the new series layout.
+    private const val VERSION = 3
     private const val MAX_SERIES_POINTS = 100_000 // sanity bound when reading a possibly-corrupt file
 
     private fun dir(context: Context) = File(context.filesDir, DIR).apply { mkdirs() }
@@ -52,6 +54,8 @@ internal object HistoryStore {
                 writeSeries(out, snap.ram)
                 writeSeries(out, snap.temp)
                 writeSeries(out, snap.power)
+                writeSeries(out, snap.diskRead)
+                writeSeries(out, snap.diskWrite)
                 out.writeInt(snap.gaps.size)
                 for (g in snap.gaps) out.writeInt(g)
             }
@@ -91,6 +95,8 @@ internal object HistoryStore {
                 val ram = readSeries(inp) ?: return null
                 val temp = readSeries(inp) ?: return null
                 val power = readSeries(inp) ?: return null
+                val diskRead = readSeries(inp) ?: return null
+                val diskWrite = readSeries(inp) ?: return null
                 val gaps = readInts(inp) ?: return null
                 HistorySession(
                     id = start,
@@ -99,6 +105,7 @@ internal object HistoryStore {
                     cpuMaxMhz = cpuMax,
                     snapshot = SessionSnapshot(
                         interval, ramTotal, cpu, ram, temp, power, min, peak, energy, dischargeSec, gaps, start,
+                        diskRead = diskRead, diskWrite = diskWrite,
                     ),
                 )
             }

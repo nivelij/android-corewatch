@@ -63,6 +63,7 @@ import com.corewatch.ui.components.HistoryCharts
 import com.corewatch.ui.components.IdentityHeader
 import com.corewatch.ui.components.RamCard
 import com.corewatch.ui.components.PowerThermalCard
+import com.corewatch.ui.components.StorageCard
 import com.corewatch.ui.components.SystemInfoPanel
 import com.corewatch.ui.components.SystemSpecsDialog
 import com.corewatch.ui.components.AccentPicker
@@ -177,6 +178,9 @@ fun CoreWatchScreen(
                             ramTotalBytes = viewModel.ramTotalBytes,
                             tempPoints = viewModel.tempHistory,
                             powerPoints = viewModel.powerHistory,
+                            diskReadPoints = viewModel.diskReadHistory,
+                            diskWritePoints = viewModel.diskWriteHistory,
+                            showDiskIo = viewModel.diskIoSupported,
                             gaps = viewModel.gapIndices,
                             intervalSec = viewModel.historyIntervalSec,
                             modifier = Modifier.fillMaxWidth(),
@@ -323,6 +327,7 @@ private fun PortraitLayout(
         }
         RamCard(metrics, Modifier.fillMaxWidth())
         PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth(), showSession = recording)
+        StorageCard(metrics.disk, Modifier.fillMaxWidth())
         charts()
         SystemInfoPanel(info, Modifier.fillMaxWidth())
         Spacer(Modifier.height(20.dp))
@@ -368,6 +373,7 @@ private fun LandscapeLayout(
                 CpuCoresCard(metrics.cpu, Modifier.fillMaxWidth())
             }
             PowerThermalCard(metrics.battery, metrics.thermal, session, Modifier.fillMaxWidth(), showSession = recording)
+            StorageCard(metrics.disk, Modifier.fillMaxWidth())
             charts()
             Spacer(Modifier.height(20.dp))
         }

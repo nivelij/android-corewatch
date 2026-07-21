@@ -6,7 +6,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.PowerManager
+import android.os.StatFs
 import android.os.SystemClock
+import android.os.storage.StorageManager
 import java.io.File
 import kotlin.math.abs
 
@@ -98,6 +100,56 @@ data class BatteryInfo(
     }
 }
 
+/** Whether a mounted storage volume is built-in or a removable card. */
+enum class StorageKind { INTERNAL, REMOVABLE }
+
+/** One mounted storage volume's capacity. Read via public APIs, so always available on every
+ *  Android version — unlike throughput, which depends on unblocked kernel counters. */
+data class StorageVolumeInfo(
+    val label: String,
+    val kind: StorageKind,
+    val totalBytes: Long,
+    /** Bytes in use = total − available. */
+    val usedBytes: Long,
+)
+
+/** Read/write throughput for one physical block device (or one kind, after same-kind merge), in
+ *  bytes/sec over the actual elapsed interval on the asking [IoChannel]. */
+data class DiskIoRate(
+    val kind: StorageKind,
+    val label: String,
+    val readBytesPerSec: Float,
+    val writeBytesPerSec: Float,
+)
+
+/**
+ * Disk state for a single sample. [volumes] (capacity) is always present; [io] (throughput) is only
+ * populated when /proc/diskstats is readable by the app — SELinux blocks it on stock Android, so
+ * this hides on most retail devices and lights up on permissive/custom ROMs, exactly like the CPU
+ * load path. [io] is also empty on the very first sample of a channel (no baseline delta yet).
+ */
+data class DiskInfo(
+    val volumes: List<StorageVolumeInfo>,
+    val ioSupported: Boolean,
+    val io: List<DiskIoRate>,
+) {
+    /** Device-wide read throughput (sum across devices) for the history series; `NaN` when no rate. */
+    val aggReadBytesPerSec: Float
+        get() = io.takeIf { it.isNotEmpty() }?.sumOf { it.readBytesPerSec.toDouble() }?.toFloat() ?: Float.NaN
+
+    /** Device-wide write throughput (sum across devices) for the history series; `NaN` when no rate. */
+    val aggWriteBytesPerSec: Float
+        get() = io.takeIf { it.isNotEmpty() }?.sumOf { it.writeBytesPerSec.toDouble() }?.toFloat() ?: Float.NaN
+
+    companion object {
+        val EMPTY = DiskInfo(emptyList(), false, emptyList())
+    }
+}
+
+/** The sampling cadence asking for a throughput reading. Each keeps its own counter baseline so the
+ *  1 s live flow and the slower recorder loop never consume each other's deltas (see [MetricsReader]). */
+enum class IoChannel { LIVE, RECORDER }
+
 /** Snapshot of the values that refresh every second. */
 data class LiveMetrics(
     val cpu: CpuClock,
@@ -105,9 +157,10 @@ data class LiveMetrics(
     val ramTotalBytes: Long,
     val battery: BatteryInfo,
     val thermal: ThermalInfo,
+    val disk: DiskInfo,
 ) {
     companion object {
-        val EMPTY = LiveMetrics(CpuClock.EMPTY, 0L, 0L, BatteryInfo.EMPTY, ThermalInfo.EMPTY)
+        val EMPTY = LiveMetrics(CpuClock.EMPTY, 0L, 0L, BatteryInfo.EMPTY, ThermalInfo.EMPTY, DiskInfo.EMPTY)
     }
 }
 
@@ -124,10 +177,25 @@ class MetricsReader(context: Context) {
     private val powerManager: PowerManager by lazy {
         appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
     }
+    private val storageManager: StorageManager by lazy {
+        appContext.getSystemService(Context.STORAGE_SERVICE) as StorageManager
+    }
 
     // Previous /proc/stat per-core counters, for computing busy fraction between samples.
     private var prevCpuTotals: LongArray? = null
     private var prevCpuIdles: LongArray? = null
+
+    // Previous /proc/diskstats sector counters, per sampling channel then per device name. Separate
+    // per channel so the 1 s live flow and the slower recorder loop never divide against each other's
+    // deltas (a rate, unlike a ratio, does not survive interleaving on a shared baseline).
+    private class IoBaseline(val atMs: Long, val readSectors: Long, val writeSectors: Long)
+    private val ioPrev = HashMap<IoChannel, MutableMap<String, IoBaseline>>()
+
+    // Cached storage-volume enumeration + labels (the costly part; near-static). StatFs itself is
+    // cheap and runs every sample; only the volume list + descriptions are refreshed on a TTL.
+    private class VolumeRef(val dir: File, val label: String, val kind: StorageKind)
+    private var volumeRefs: List<VolumeRef> = emptyList()
+    private var volumeRefsAtMs = 0L
 
     // Cached thermal headroom — getThermalHeadroom returns NaN if polled faster than ~1/s, so we
     // query it at most every HEADROOM_QUERY_INTERVAL_MS and reuse the last good value in between.
@@ -146,6 +214,23 @@ class MetricsReader(context: Context) {
         }
     }
 
+    /** Whether the app can read /proc/diskstats for real block-device I/O. Blocked by SELinux for
+     *  untrusted apps on stock enforcing Android (12+), but often open on older/custom ROMs. Probed
+     *  once; requires at least one *physical* whole-disk row so a diskstats that lists only virtual
+     *  devices (zram/loop) doesn't count. When false, disk throughput is hidden and only capacity
+     *  is shown — the same graceful degrade as [cpuLoadSupported]. */
+    val diskIoSupported: Boolean by lazy {
+        try {
+            File("/proc/diskstats").useLines { lines ->
+                lines.any { line ->
+                    isPhysicalWholeDisk(line.trim().split(Regex("\\s+")).getOrNull(2))
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /** Number of logical CPUs, discovered from sysfs with a Runtime fallback. */
     val coreCount: Int = run {
         val dirs = File("/sys/devices/system/cpu")
@@ -154,7 +239,7 @@ class MetricsReader(context: Context) {
         if (dirs != null && dirs > 0) dirs else Runtime.getRuntime().availableProcessors()
     }
 
-    fun sample(): LiveMetrics {
+    fun sample(ioChannel: IoChannel = IoChannel.LIVE): LiveMetrics {
         val (used, total) = readRam()
         return LiveMetrics(
             cpu = readCpuClock().copy(perCoreLoad = readCpuLoad()),
@@ -162,6 +247,7 @@ class MetricsReader(context: Context) {
             ramTotalBytes = total,
             battery = readBattery(),
             thermal = readThermal(),
+            disk = readDiskIo(ioChannel),
         )
     }
 
@@ -199,6 +285,93 @@ class MetricsReader(context: Context) {
             val dTotal = totals[i] - prevT[i]
             val dIdle = idles[i] - prevI[i]
             if (dTotal <= 0) 0f else ((dTotal - dIdle).toFloat() / dTotal).coerceIn(0f, 1f)
+        }
+    }
+
+    /**
+     * Disk capacity (per mounted volume, always) plus read/write throughput (per physical block
+     * device, only when /proc/diskstats is readable). Throughput is a delta over the *actual*
+     * elapsed time since this channel's previous call — never an assumed interval — so it stays
+     * correct even though the live flow (1 s) and recorder (slower) both drive [sample]. Each
+     * [channel] keeps its own per-device baseline. Synchronized like [readCpuLoad] because more than
+     * one coroutine reaches here.
+     */
+    @Synchronized
+    private fun readDiskIo(channel: IoChannel): DiskInfo {
+        val volumes = readVolumes()
+        if (!diskIoSupported) return DiskInfo(volumes, ioSupported = false, io = emptyList())
+
+        val lines = try {
+            File("/proc/diskstats").readLines()
+        } catch (_: Exception) {
+            return DiskInfo(volumes, ioSupported = true, io = emptyList())
+        }
+        val now = SystemClock.elapsedRealtime()
+        val prevMap = ioPrev.getOrPut(channel) { mutableMapOf() }
+        // Collect raw per-device rates first; classification needs the whole-disk set (an mmc device
+        // is the SD card only if a UFS/SCSI internal disk is also present), which isn't known until
+        // the pass finishes.
+        val perDevice = ArrayList<DeviceRate>()
+        for (line in lines) {
+            val t = line.trim().split(Regex("\\s+"))
+            val name = t.getOrNull(2)
+            if (!isPhysicalWholeDisk(name)) continue // whole disks only → no parent+partition double count
+            name!!
+            val rd = t.getOrNull(5)?.toLongOrNull() ?: continue    // sectors read (field 3 after name)
+            val wr = t.getOrNull(9)?.toLongOrNull() ?: continue    // sectors written (field 7 after name)
+            val prev = prevMap[name]
+            prevMap[name] = IoBaseline(now, rd, wr)
+            if (prev == null) continue                              // first sample on this (channel, device)
+            val dtSec = (now - prev.atMs) / 1000f
+            if (dtSec <= 0f) continue
+            perDevice.add(
+                DeviceRate(
+                    name = name,
+                    readBytesPerSec = ((rd - prev.readSectors) * SECTOR_BYTES / dtSec).coerceAtLeast(0f),
+                    writeBytesPerSec = ((wr - prev.writeSectors) * SECTOR_BYTES / dtSec).coerceAtLeast(0f),
+                ),
+            )
+        }
+        val hasScsiDisk = perDevice.any { it.name.startsWith("sd") || it.name.startsWith("nvme") }
+        // Classify each device, then merge same-kind devices (e.g. multiple UFS LUNs) into one row.
+        val merged = perDevice
+            .groupBy { classifyKind(it.name, hasScsiDisk) }
+            .map { (kind, rs) ->
+                DiskIoRate(
+                    kind = kind,
+                    label = labelFor(kind),
+                    readBytesPerSec = rs.sumOf { it.readBytesPerSec.toDouble() }.toFloat(),
+                    writeBytesPerSec = rs.sumOf { it.writeBytesPerSec.toDouble() }.toFloat(),
+                )
+            }
+            .sortedBy { it.kind } // INTERNAL before REMOVABLE
+        return DiskInfo(volumes, ioSupported = true, io = merged)
+    }
+
+    /** Per-mounted-volume capacity. Enumeration + labels are TTL-cached (near-static, relatively
+     *  costly); [StatFs] runs every call and is cheap. A volume that throws (e.g. an SD card pulled
+     *  mid-session) is simply dropped from the returned list. */
+    private fun readVolumes(): List<StorageVolumeInfo> {
+        val now = SystemClock.elapsedRealtime()
+        if (volumeRefs.isEmpty() || now - volumeRefsAtMs >= VOLUME_REFRESH_MS) {
+            val refs = ArrayList<VolumeRef>()
+            appContext.getExternalFilesDirs(null).forEachIndexed { i, dir ->
+                dir ?: return@forEachIndexed // an unmounted / ejecting volume slot
+                val sv = runCatching { storageManager.getStorageVolume(dir) }.getOrNull()
+                val removable = sv?.isRemovable ?: (i > 0)
+                val label = sv?.getDescription(appContext)?.takeIf { it.isNotBlank() }
+                    ?: if (i == 0) "Internal" else "microSD"
+                refs.add(VolumeRef(dir, label, if (removable) StorageKind.REMOVABLE else StorageKind.INTERNAL))
+            }
+            volumeRefs = refs
+            volumeRefsAtMs = now
+        }
+        return volumeRefs.mapNotNull { ref ->
+            runCatching {
+                val fs = StatFs(ref.dir.path)
+                val total = fs.totalBytes
+                StorageVolumeInfo(ref.label, ref.kind, total, (total - fs.availableBytes).coerceAtLeast(0L))
+            }.getOrNull()
         }
     }
 
@@ -320,6 +493,43 @@ class MetricsReader(context: Context) {
         )
     }
 
+    /** Raw per-device rate before kind classification/merge. */
+    private class DeviceRate(val name: String, val readBytesPerSec: Float, val writeBytesPerSec: Float)
+
+    /** A physical *whole* block device worth summing — excludes virtual devices (loop/ram/zram/dm/sr)
+     *  and partition sub-devices (sda1, mmcblk0p1, nvme0n1p1). Counting only whole disks avoids
+     *  double-counting a parent together with its partitions. */
+    private fun isPhysicalWholeDisk(name: String?): Boolean {
+        name ?: return false
+        return when {
+            name.matches(Regex("(loop|ram|zram|sr)\\d+")) || name.matches(Regex("dm-\\d+")) -> false
+            name.matches(Regex("(sd[a-z]+|vd[a-z]+)\\d+")) -> false              // SCSI/UFS/virtio partition
+            name.matches(Regex("(mmcblk\\d+|nvme\\d+n\\d+)p\\d+")) -> false       // eMMC/SD/NVMe partition
+            name.matches(Regex("sd[a-z]+")) -> true                              // SCSI/UFS whole disk
+            name.matches(Regex("vd[a-z]+")) -> true                              // virtio whole disk (VM/emulator/cloud)
+            name.matches(Regex("mmcblk\\d+")) -> true                            // eMMC/SD whole disk
+            name.matches(Regex("nvme\\d+n\\d+")) -> true                         // NVMe whole disk
+            else -> false
+        }
+    }
+
+    /** Best-effort Internal vs Removable. `sd*`/`nvme*` are internal UFS/NVMe; an `mmcblk*` is the SD
+     *  card when a UFS/SCSI disk is also present ([hasScsiDisk]), otherwise `mmcblk0` is the internal
+     *  eMMC and any higher-indexed mmc is removable. Used only for labels / the live split — never
+     *  persisted, so a wrong guess is cheap. */
+    private fun classifyKind(name: String, hasScsiDisk: Boolean): StorageKind = when {
+        name.startsWith("sd") || name.startsWith("nvme") || name.startsWith("vd") -> StorageKind.INTERNAL
+        name.startsWith("mmcblk") -> when {
+            hasScsiDisk -> StorageKind.REMOVABLE
+            name == "mmcblk0" -> StorageKind.INTERNAL
+            else -> StorageKind.REMOVABLE
+        }
+        else -> StorageKind.INTERNAL
+    }
+
+    private fun labelFor(kind: StorageKind): String =
+        if (kind == StorageKind.REMOVABLE) "microSD" else "Internal"
+
     /** Reads a cpufreq node in kHz, rejecting implausible values (e.g. emulator placeholders). */
     private fun readFreqKHz(path: String): Long? =
         readSysLong(path)?.takeIf { it >= MIN_PLAUSIBLE_KHZ }
@@ -340,5 +550,9 @@ class MetricsReader(context: Context) {
         // boundary cleanly separates AOSP µA (active current is far higher) from OEM mA (even fast
         // charge stays well under 30 A).
         const val CURRENT_MICROAMP_THRESHOLD = 30_000
+        // /proc/diskstats counts I/O in 512-byte sectors regardless of the device's real block size.
+        const val SECTOR_BYTES = 512f
+        // Storage-volume enumeration + labels are near-static; re-scan at most this often.
+        const val VOLUME_REFRESH_MS = 30_000L
     }
 }

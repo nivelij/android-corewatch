@@ -59,6 +59,7 @@ import com.corewatch.monitor.BatteryInfo
 import com.corewatch.monitor.ChargeStatus
 import com.corewatch.monitor.CpuClock
 import com.corewatch.monitor.DeviceInfo
+import com.corewatch.monitor.DiskInfo
 import com.corewatch.monitor.LiveMetrics
 import com.corewatch.monitor.Plug
 import com.corewatch.monitor.ThermalInfo
@@ -83,6 +84,7 @@ import kotlin.math.roundToInt
 
 private fun mhzToGhz(mhz: Int): String = String.format("%.2f", mhz / 1000f)
 private fun bytesToGb(bytes: Long): String = String.format("%.1f", bytes / 1_073_741_824f)
+private fun mbps(bytesPerSec: Float): String = String.format("%.1f MB/s", bytesPerSec / 1_048_576f)
 
 /* ---------- core glyph (identity mark) ---------- */
 
@@ -404,6 +406,65 @@ fun RamCard(metrics: LiveMetrics, modifier: Modifier = Modifier) {
         Caption("of ${bytesToGb(total)} GB · ${(fraction * 100).roundToInt()}%")
         Spacer(Modifier.height(14.dp))
         GradientBar(fraction = animated)
+    }
+}
+
+/**
+ * Storage instrument: one capacity block per mounted volume (Internal + microSD), and — only where
+ * the kernel exposes /proc/diskstats to the app — a live read/write throughput line per volume kind
+ * below a hairline. When throughput is blocked (stock Android) the card silently shows capacity only,
+ * the same degrade as [CpuCard] falling back from load to clock.
+ */
+@Composable
+fun StorageCard(disk: DiskInfo, modifier: Modifier = Modifier) {
+    val accent = LocalPalette.current.accent
+    Panel(label = "Storage", modifier = modifier) {
+        if (disk.volumes.isEmpty()) {
+            Caption("storage not readable")
+            return@Panel
+        }
+        disk.volumes.forEachIndexed { i, v ->
+            if (i > 0) Spacer(Modifier.height(16.dp))
+            val fraction = if (v.totalBytes > 0) (v.usedBytes.toFloat() / v.totalBytes).coerceIn(0f, 1f) else 0f
+            val animated by animateFloatAsState(fraction, tween(600), label = "vol$i")
+            Text(
+                text = v.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                letterSpacing = 1.sp,
+            )
+            Spacer(Modifier.height(2.dp))
+            MetricValue(value = bytesToGb(v.usedBytes), unit = "GB")
+            Spacer(Modifier.height(2.dp))
+            Caption("of ${bytesToGb(v.totalBytes)} GB · ${(fraction * 100).roundToInt()}%")
+            Spacer(Modifier.height(10.dp))
+            GradientBar(fraction = animated)
+        }
+        // Throughput only where the counters are readable and a rate exists (not the first sample).
+        if (disk.ioSupported && disk.io.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            HairlineDivider()
+            Spacer(Modifier.height(12.dp))
+            SectionLabel("Throughput")
+            Spacer(Modifier.height(10.dp))
+            disk.io.forEachIndexed { i, rate ->
+                if (i > 0) Spacer(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = rate.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "R ${mbps(rate.readBytesPerSec)}  ·  W ${mbps(rate.writeBytesPerSec)}",
+                        style = MaterialTheme.typography.titleMedium.mono(),
+                        color = accent,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
     }
 }
 

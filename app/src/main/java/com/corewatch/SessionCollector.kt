@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.corewatch.monitor.DeviceInfo
+import com.corewatch.monitor.IoChannel
 import com.corewatch.monitor.LiveMetrics
 import com.corewatch.monitor.MetricsReader
 import kotlinx.coroutines.CoroutineScope
@@ -68,6 +69,8 @@ object SessionCollector {
     val ramHistory = mutableStateListOf<Float>()
     val tempHistory = mutableStateListOf<Float>()
     val powerHistory = mutableStateListOf<Float>() // battery draw in W, ≥0 on battery; NaN while charging
+    val diskReadHistory = mutableStateListOf<Float>()  // device-wide disk read B/s; NaN when unsupported/first tick
+    val diskWriteHistory = mutableStateListOf<Float>() // device-wide disk write B/s; NaN when unsupported/first tick
 
     /**
      * Series indices marking a discontinuity: the point where a previous (killed) session ended and
@@ -96,6 +99,10 @@ object SessionCollector {
     /** False when the OS blocks /proc/stat for the app: no CPU load available, so the CPU series and
      *  charts use clock (MHz/GHz) instead of load (%). Constant per device. */
     val cpuLoadSupported: Boolean get() = ::reader.isInitialized && reader.cpuLoadSupported
+
+    /** False when the OS blocks /proc/diskstats for the app: no disk throughput, so the Storage card
+     *  shows capacity only and the disk charts are omitted. Constant per device. */
+    val diskIoSupported: Boolean get() = ::reader.isInitialized && reader.diskIoSupported
 
     // ---- Whole-session battery aggregates (since collection started). ----
     private var batteryTempMinC by mutableStateOf<Float?>(null)
@@ -166,6 +173,8 @@ object SessionCollector {
             ramHistory.addAll(snap.ram)
             tempHistory.addAll(snap.temp)
             powerHistory.addAll(snap.power)
+            diskReadHistory.addAll(snap.diskRead)
+            diskWriteHistory.addAll(snap.diskWrite)
             batteryTempMinC = snap.battMinTempC
             batteryTempMaxC = snap.battMaxTempC
             batteryEnergyMwh = snap.battEnergyMwh
@@ -185,7 +194,7 @@ object SessionCollector {
         if (recorderJob?.isActive == true) return
         recorderJob = scope.launch {
             while (isActive) {
-                val sample = withContext(Dispatchers.IO) { reader.sample() }
+                val sample = withContext(Dispatchers.IO) { reader.sample(IoChannel.RECORDER) }
                 lastTickMillis = System.currentTimeMillis()
                 ramTotalBytes = sample.ramTotalBytes
                 // CPU series holds load % where the OS exposes /proc/stat (a meaningful, always-moving
@@ -200,6 +209,11 @@ object SessionCollector {
                 // Power *draw* only exists on battery; while charging it's N/A (NaN → chart break).
                 val drawW = sample.battery.drawW
                 powerHistory.add(drawW ?: Float.NaN)
+                // Disk throughput is NaN when the OS blocks the counters or on the first tick (no
+                // baseline); appended every tick regardless so all series stay index-aligned with the
+                // gap markers and decimation.
+                diskReadHistory.add(sample.disk.aggReadBytesPerSec)
+                diskWriteHistory.add(sample.disk.aggWriteBytesPerSec)
 
                 sample.battery.tempC?.let { t ->
                     batteryTempMinC = batteryTempMinC?.let { min(it, t) } ?: t
@@ -217,6 +231,8 @@ object SessionCollector {
                     decimate(ramHistory)
                     decimate(tempHistory)
                     decimate(powerHistory)
+                    decimate(diskReadHistory)
+                    decimate(diskWriteHistory)
                     remapGapsAfterDecimate(cpuHistory.size)
                     historyIntervalSec *= 2
                 }
@@ -253,6 +269,8 @@ object SessionCollector {
         ramHistory.clear()
         tempHistory.clear()
         powerHistory.clear()
+        diskReadHistory.clear()
+        diskWriteHistory.clear()
         ramTotalBytes = 0L
         historyIntervalSec = HISTORY_BASE_INTERVAL_SEC
         batteryTempMinC = null
@@ -294,6 +312,8 @@ object SessionCollector {
         ram = ramHistory.toList(),
         temp = tempHistory.toList(),
         power = powerHistory.toList(),
+        diskRead = diskReadHistory.toList(),
+        diskWrite = diskWriteHistory.toList(),
         battMinTempC = batteryTempMinC,
         battMaxTempC = batteryTempMaxC,
         battEnergyMwh = batteryEnergyMwh,

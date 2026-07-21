@@ -50,6 +50,7 @@ private fun mhzToGhz(mhz: Float): String = String.format("%.2f GHz", mhz / 1000f
 private fun bytesToGb(bytes: Float): String = String.format("%.1f GB", bytes / 1_073_741_824f)
 private fun degC(t: Float): String = String.format("%.1f °C", t)
 private fun watts(w: Float): String = String.format("%.2f W", w) // draw, ≥0 (N/A while charging)
+private fun mbps(bytesPerSec: Float): String = String.format("%.1f MB/s", bytesPerSec / 1_048_576f)
 
 /** Both session charts, stacked. Renders whatever data exists so far this session. */
 @Composable
@@ -63,6 +64,11 @@ fun HistoryCharts(
     ramTotalBytes: Long,
     tempPoints: List<Float>,
     powerPoints: List<Float>,
+    // Disk read/write throughput (bytes/sec). Only rendered when [showDiskIo]; on devices where the
+    // OS blocks /proc/diskstats these two charts are omitted entirely (capacity is shown on the tile).
+    diskReadPoints: List<Float> = emptyList(),
+    diskWritePoints: List<Float> = emptyList(),
+    showDiskIo: Boolean = false,
     gaps: List<Int>,
     intervalSec: Int,
     modifier: Modifier = Modifier,
@@ -94,13 +100,22 @@ fun HistoryCharts(
     var powerHi = powerValid.maxOrNull() ?: 1f
     if (powerHi - powerLo < 1f) powerHi = powerLo + 1f
 
-    // Wired once, placed into a 2×2 grid on wide screens (landscape) or a single column otherwise.
-    val cards = listOf<@Composable (Modifier) -> Unit>(
-        cpuCard,
-        { m -> MetricChartCard("Memory history", ramPoints, 0f, ramTop, gaps, intervalSec, ::bytesToGb, m, emptyLabel = emptyLabel) },
-        { m -> MetricChartCard("Battery temperature", tempPoints, tempLo, tempHi, gaps, intervalSec, ::degC, m, emptyLabel = emptyLabel) },
-        { m -> MetricChartCard("Power draw", powerPoints, powerLo, powerHi, gaps, intervalSec, ::watts, m, naLabel = "n/a", emptyLabel = emptyLabel) },
-    )
+    // Disk read/write share a common axis top so the two charts are directly comparable; anchored at
+    // 0 and floored so a flat/idle trace doesn't blow up. 1 MB/s minimum span.
+    val diskValid = (diskReadPoints + diskWritePoints).filter { !it.isNaN() }
+    val diskTop = (diskValid.maxOrNull() ?: 0f).coerceAtLeast(1_048_576f)
+
+    // Wired once, placed into a 2-column grid on wide screens (landscape) or a single column otherwise.
+    val cards = buildList<@Composable (Modifier) -> Unit> {
+        add(cpuCard)
+        add { m -> MetricChartCard("Memory history", ramPoints, 0f, ramTop, gaps, intervalSec, ::bytesToGb, m, emptyLabel = emptyLabel) }
+        add { m -> MetricChartCard("Battery temperature", tempPoints, tempLo, tempHi, gaps, intervalSec, ::degC, m, emptyLabel = emptyLabel) }
+        add { m -> MetricChartCard("Power draw", powerPoints, powerLo, powerHi, gaps, intervalSec, ::watts, m, naLabel = "n/a", emptyLabel = emptyLabel) }
+        if (showDiskIo) {
+            add { m -> MetricChartCard("Disk read", diskReadPoints, 0f, diskTop, gaps, intervalSec, ::mbps, m, naLabel = "n/a", emptyLabel = emptyLabel) }
+            add { m -> MetricChartCard("Disk write", diskWritePoints, 0f, diskTop, gaps, intervalSec, ::mbps, m, naLabel = "n/a", emptyLabel = emptyLabel) }
+        }
+    }
 
     // 2×2 grid only when there's room (landscape / tablets); phone portrait stacks one chart per
     // row so each stays wide enough to read.
